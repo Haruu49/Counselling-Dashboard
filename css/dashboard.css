@@ -626,7 +626,10 @@ body.is-sidebar-collapsed .sidebar-note { justify-content: center; }
 .signed-out p,
 .not-found p { color: var(--ink-3); }
 
+/* Signed out there is no navigation, no search and no profile, so the whole
+   top bar goes rather than leaving an empty band above the sign-in card. */
 body.is-signed-out .sidebar,
+body.is-signed-out .topbar,
 body.is-signed-out .topbar-right,
 body.is-signed-out .breadcrumb { display: none; }
 body.is-signed-out .app-shell { grid-template-columns: minmax(0, 1fr); }

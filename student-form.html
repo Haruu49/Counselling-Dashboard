@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#FAFAF7">
+<meta name="description" content="Request an appointment with a university counsellor.">
+<meta name="robots" content="noindex, nofollow">
+<title>Counselling Request Form | Student Counselling</title>
+
+<link rel="icon" href="assets/images/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/images/favicon.svg">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+
+<!--
+  dashboard.css carries the design tokens and base type; components.css the
+  buttons and cards. student-form.css is the only file specific to this page,
+  so the form looks like the service it belongs to without a second palette.
+-->
+<link rel="stylesheet" href="css/dashboard.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/student-form.css">
+</head>
+
+<body class="student-page is-booting">
+<a class="skip-link" href="#form-main">Skip to the form</a>
+
+<header class="student-topbar">
+  <p class="student-brand">
+    <strong>Student Counselling</strong>
+    <span>Counselling request</span>
+  </p>
+</header>
+
+<!-- student-form.js builds the form from the lists in js/form-options.js. -->
+<main id="form-main" class="student-main" tabindex="-1"></main>
+
+<footer class="student-footer">
+  <p>
+    What you write here is read only by the counselling team.
+    If you need help urgently, contact the counselling office directly or your local emergency service.
+  </p>
+</footer>
+
+<noscript>
+  <p class="noscript-note">
+    This form needs JavaScript to run. Please contact the counselling office directly instead.
+  </p>
+</noscript>
+
+<script type="module" src="js/student-form.js"></script>
+</body>
+</html>

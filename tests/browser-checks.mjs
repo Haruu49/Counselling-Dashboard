@@ -14,7 +14,16 @@
  * Then, with the dashboard served (see README):
  *
  *   python3 -m http.server 8000 &
- *   BASE_URL=http://localhost:8000/ node tests/browser-checks.mjs
+ *   BASE_URL=http://localhost:8000/ \
+ *   TEST_COUNSELLOR_EMAIL=... TEST_COUNSELLOR_PASSWORD=... \
+ *   node tests/browser-checks.mjs
+ *
+ * The dashboard now requires a counsellor session, so everything past the
+ * sign-in screen needs a real account on a project with the migration in
+ * supabase/migrations applied. Use a fictional account created in the
+ * Supabase dashboard, never a real counsellor's. Without those two variables
+ * the suite checks the sign-in gate and stops, reporting the rest as skipped
+ * rather than failing.
  *
  * Exits non-zero if any check fails. Screenshots and downloaded CSVs are
  * written to the directory given by OUT_DIR (default: ./tests/output).
@@ -55,12 +64,50 @@ page.on('requestfailed', r => failedRequests.push(`${r.url()} :: ${r.failure()?.
 
 const settle = (ms = 700) => page.waitForTimeout(ms);
 
-// ---------- boot ----------
+const EMAIL = process.env.TEST_COUNSELLOR_EMAIL || '';
+const PASSWORD = process.env.TEST_COUNSELLOR_PASSWORD || '';
+
+// ---------- the sign-in gate ----------
+// This part runs with or without credentials: it is what an unauthenticated
+// visitor sees, and it must never be a dashboard.
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await settle(900);
 
 ok('Page title is correct', await page.title() === 'Counselling Dashboard | Student Counselling Management', await page.title());
 ok('Boot class removed (app started)', !(await page.evaluate(() => document.body.classList.contains('is-booting'))));
+
+const configured = (await page.locator('.auth-form').count()) === 1;
+ok('An unauthenticated visitor gets a sign-in screen, not the dashboard',
+   configured || (await page.locator('.auth-card').count()) === 1,
+   configured ? '' : 'js/config.js is missing, so the configuration screen is shown instead');
+ok('No student record is rendered before sign-in',
+   (await page.locator('.data-table, .stat-card').count()) === 0);
+ok('There is no public sign-up link',
+   !(await page.locator('.auth-card').innerText()).toLowerCase().includes('create an account'));
+
+if (!configured) {
+  console.log('\nSKIP  js/config.js is missing. Copy js/config.example.js and fill it in.');
+  await browser.close();
+  process.exit(0);
+}
+
+if (!EMAIL || !PASSWORD) {
+  console.log('\nSKIP  TEST_COUNSELLOR_EMAIL / TEST_COUNSELLOR_PASSWORD are not set,');
+  console.log('      so the checks behind the sign-in gate did not run.');
+  const gatePassed = results.filter(r => r.pass).length;
+  console.log(`\n================ ${gatePassed}/${results.length} gate checks passed ================`);
+  await browser.close();
+  process.exit(results.some(r => !r.pass) ? 1 : 0);
+}
+
+await page.fill('#auth-email', EMAIL);
+await page.fill('#auth-password', PASSWORD);
+await page.click('.auth-submit');
+await page.waitForSelector('.stat-card', { timeout: 20000 }).catch(() => {});
+await settle(900);
+
+ok('A counsellor can sign in', (await page.locator('.stat-card').count()) === 4,
+   await page.locator('.auth-message').innerText().catch(() => ''));
 ok('Chart.js loaded from CDN', await page.evaluate(() => typeof window.Chart !== 'undefined'));
 ok('Lucide loaded from CDN', await page.evaluate(() => typeof window.lucide !== 'undefined'));
 ok('Lucide icons rendered as SVG', await page.evaluate(() => document.querySelectorAll('svg.lucide').length) > 10,
@@ -336,11 +383,27 @@ ok('Filters survive navigation', keptFilter === 'Completed', `value="${keptFilte
 // ---------- logout ----------
 await page.click('.nav-link-button:has-text("Logout")');
 await settle(600);
-ok('Logout asks for confirmation', (await page.locator('.modal').innerText()).includes('Log out of the prototype?'));
+ok('Logout asks for confirmation', (await page.locator('.modal').innerText()).includes('Log out of the dashboard?'));
 await page.click('.modal button:has-text("Log out")');
+await page.waitForSelector('.auth-form', { timeout: 15000 }).catch(() => {});
 await settle(700);
-ok('Logout shows the signed-out screen', (await page.locator('.signed-out h1').count()) === 1);
-await page.click('.signed-out button');
+ok('Logout returns to the sign-in screen', (await page.locator('.auth-form').count()) === 1);
+ok('No student record survives the logout',
+   (await page.locator('.data-table, .stat-card').count()) === 0);
+
+const sessionAfterLogout = await page.evaluate(() => {
+  try {
+    return window.localStorage.getItem('counselling-dashboard-auth');
+  } catch {
+    return null;
+  }
+});
+ok('The stored session is cleared on logout', !sessionAfterLogout, String(sessionAfterLogout).slice(0, 40));
+
+await page.fill('#auth-email', EMAIL);
+await page.fill('#auth-password', PASSWORD);
+await page.click('.auth-submit');
+await page.waitForSelector('.stat-card', { timeout: 20000 }).catch(() => {});
 await settle(900);
 ok('Sign back in restores the dashboard', (await page.locator('.stat-card').count()) === 4);
 

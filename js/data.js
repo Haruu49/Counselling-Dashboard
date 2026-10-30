@@ -14,18 +14,47 @@
  *     can later become a database view or RPC call.
  *   - Records are returned as copies; callers cannot mutate the store.
  *
- * All names, identifiers and comments below are fictional.
+ * All names, identifiers and comments below are fictional, with one
+ * exception: counselling requests are real rows read from Supabase. They are
+ * held in `live` below and merged into the submission accessors, so every
+ * page keeps asking the same questions it always did.
  */
+
+import { getSupabase, describeError } from './supabase.js';
 
 /* ------------------------------------------------------------------ *
  * Reference values (future: lookup tables)
  * ------------------------------------------------------------------ */
 
+/**
+ * Form types the Submissions page filters by.
+ *
+ * 'Counselling Request' is the live form students fill in at
+ * student-form.html; those rows come from Supabase. The other three are the
+ * demonstration dataset held in memory, and DEMO_FORM_TYPES is what the
+ * generator below draws from — a generated row has a detail record waiting
+ * for it, and a counselling request does not.
+ */
 export const FORM_TYPES = [
+  'Counselling Request',
   'Counselling Registration',
   'Wellbeing Assessment',
   'Counselling Feedback'
 ];
+
+const DEMO_FORM_TYPES = FORM_TYPES.slice(1);
+
+/* ---- The printed counselling form, GMI-RO-P04-F02 ----
+ *
+ * Defined in form-options.js, which has no dependencies, so the public
+ * student form can import the same lists without loading a Supabase client.
+ * Re-exported here because every other module expects reference lists to come
+ * from the data layer.
+ */
+export {
+  REQUEST_TYPES, SUBMISSION_CHANNELS, COUNSELLING_PURPOSES,
+  COUNSELLING_ISSUES, REFERENCE_SOURCES
+} from './form-options.js';
 
 export const SUBMISSION_STATUSES = ['New', 'Under Review', 'Completed'];
 
@@ -212,7 +241,7 @@ function buildSubmissions(students) {
     for (let i = 0; i < count; i += 1) {
       counter += 1;
       const student = pick(students);
-      const formType = pick(FORM_TYPES);
+      const formType = pick(DEMO_FORM_TYPES);
       const submittedAt = dateInMonth(monthsBack);
       const submissionId = `sub-${pad(counter, 4)}`;
 
@@ -512,6 +541,156 @@ function percentChange(current, previous) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Live counselling requests (Supabase)
+ *
+ * The only records in this file that are not fictional. They are cached here
+ * so the submission accessors can merge them with the demonstration rows and
+ * keep the signatures every page already calls; realtime.js asks for a
+ * refresh whenever the table changes.
+ * ------------------------------------------------------------------ */
+
+const live = { requests: [], loaded: false, error: null };
+
+/** The columns the dashboard reads, spelled out so a schema change is visible here. */
+const REQUEST_COLUMNS = [
+  'id', 'reference_code', 'request_type', 'channel',
+  'student_name', 'student_id', 'semester', 'contact_no', 'email',
+  'purposes', 'purpose_other', 'issues', 'issue_other', 'description',
+  'status', 'reference_source', 'appointment_at', 'assigned_counsellor_id',
+  'office_notes', 'submitted_at', 'updated_at'
+].join(',');
+
+/** A request, shaped like the inbox row every submission view already expects. */
+function requestToSubmission(row) {
+  return {
+    id: row.id,
+    student_ref: null,
+    student_id: row.student_id,
+    student_name: row.student_name,
+    form_type: 'Counselling Request',
+    submitted_at: row.submitted_at,
+    status: row.status,
+    detail_id: row.id,
+    is_live: true
+  };
+}
+
+/** Demonstration rows and live counselling requests, as one list. */
+function allSubmissions() {
+  return store.submissions.concat(live.requests.map(requestToSubmission));
+}
+
+/**
+ * Re-reads the queue: once after sign-in, then on every realtime event.
+ *
+ * Reading the table rather than trusting the event payload keeps the list
+ * correct when events are coalesced, arrive out of order, or are missed
+ * during a reconnect. Returns the rows that are new since the last read so
+ * the caller can raise a notification.
+ */
+export async function refreshCounsellingRequests() {
+  const supabase = getSupabase();
+  if (!supabase) {
+    live.loaded = true;
+    return { rows: [], added: [] };
+  }
+
+  const known = new Set(live.requests.map(row => row.id));
+  const { data, error } = await supabase
+    .from('counselling_requests')
+    .select(REQUEST_COLUMNS)
+    .order('submitted_at', { ascending: false })
+    .limit(1000);
+
+  if (error) {
+    live.error = describeError(error, 'The counselling request queue could not be loaded.');
+    live.loaded = true;
+    return { rows: copy(live.requests), added: [], error: live.error };
+  }
+
+  live.error = null;
+  live.requests = data ?? [];
+  live.loaded = true;
+
+  const added = live.requests.filter(row => !known.has(row.id));
+  // Nothing is "new" on the first read, or every request would announce itself.
+  if (known.size) added.forEach(noteNewRequest);
+  return { rows: copy(live.requests), added: copy(added) };
+}
+
+/** The message from the last failed read, or null. */
+export function counsellingRequestError() {
+  return live.error;
+}
+
+export async function getCounsellingRequest(id) {
+  const row = live.requests.find(r => r.id === id);
+  return row ? copy(row) : null;
+}
+
+/**
+ * Writes the "For Office Use Only" half of a request.
+ *
+ * Only those columns are sent. The database refuses the rest regardless —
+ * see counselling_requests_freeze_submission() — but a student's words should
+ * not be in an update statement at all.
+ */
+export async function updateCounsellingRequest(id, patch) {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error('Not connected to Supabase.');
+
+  const OFFICE_FIELDS = ['status', 'reference_source', 'appointment_at', 'assigned_counsellor_id', 'office_notes'];
+  const update = {};
+  OFFICE_FIELDS.forEach(key => {
+    if (key in patch) update[key] = patch[key] === '' ? null : patch[key];
+  });
+  if (!Object.keys(update).length) return getCounsellingRequest(id);
+
+  const { data, error } = await supabase
+    .from('counselling_requests')
+    .update(update)
+    .eq('id', id)
+    .select(REQUEST_COLUMNS)
+    .single();
+
+  if (error) throw new Error(describeError(error, 'That request could not be updated.'));
+
+  const index = live.requests.findIndex(r => r.id === id);
+  if (index >= 0) live.requests[index] = data;
+  return copy(data);
+}
+
+/** Active counsellors, for the "assigned counsellor" field. */
+export async function listCounsellors() {
+  const supabase = getSupabase();
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('counsellor_profiles')
+    .select('user_id,full_name,role')
+    .eq('active', true)
+    .order('full_name');
+  if (error) {
+    describeError(error);
+    return [];
+  }
+  return copy(data ?? []);
+}
+
+/** Puts an arriving request into the notification list the top bar reads. */
+function noteNewRequest(row) {
+  store.notifications.unshift({
+    id: `ntf-live-${row.id}`,
+    kind: 'submission',
+    title: `New counselling ${String(row.request_type || 'request').toLowerCase()} submitted`,
+    body: `${row.student_name} (${row.student_id}) · ${row.reference_code}`,
+    submission_id: row.id,
+    created_at: row.submitted_at,
+    read: false
+  });
+  store.notifications = store.notifications.slice(0, 40);
+}
+
+/* ------------------------------------------------------------------ *
  * Data access layer — the public API
  *
  * Phase 2 replaces each body with a Supabase call. Signatures stay.
@@ -532,8 +711,9 @@ export async function getOverviewStats() {
 
   const studentsThis = store.students.filter(s => inCurrent(s.created_at)).length;
   const studentsPrev = store.students.filter(s => inPrevious(s.created_at)).length;
-  const subsThis = store.submissions.filter(s => inCurrent(s.submitted_at)).length;
-  const subsPrev = store.submissions.filter(s => inPrevious(s.submitted_at)).length;
+  const submissions = allSubmissions();
+  const subsThis = submissions.filter(s => inCurrent(s.submitted_at)).length;
+  const subsPrev = submissions.filter(s => inPrevious(s.submitted_at)).length;
   const completedSessions = store.sessions.filter(s => s.status === 'Completed');
   const sessionsThis = completedSessions.filter(s => inCurrent(s.session_date)).length;
   const sessionsPrev = completedSessions.filter(s => inPrevious(s.session_date)).length;
@@ -545,13 +725,13 @@ export async function getOverviewStats() {
       caption: 'Registered on the demonstration roll'
     },
     total_submissions: {
-      value: store.submissions.length,
+      value: submissions.length,
       change: percentChange(subsThis, subsPrev),
       caption: `${subsThis} in the last 30 days`
     },
     pending_reviews: {
-      value: store.submissions.filter(s => s.status === 'New').length,
-      under_review: store.submissions.filter(s => s.status === 'Under Review').length,
+      value: submissions.filter(s => s.status === 'New').length,
+      under_review: submissions.filter(s => s.status === 'Under Review').length,
       caption: 'Awaiting a first read'
     },
     completed_sessions: {
@@ -564,7 +744,7 @@ export async function getOverviewStats() {
 
 export async function listSubmissions(query = {}) {
   await settle();
-  const rows = store.submissions.filter(row =>
+  const rows = allSubmissions().filter(row =>
     matchesText(row, ['student_id', 'student_name'], query.search) &&
     (!query.form_type || row.form_type === query.form_type) &&
     (!query.status || row.status === query.status) &&
@@ -575,6 +755,14 @@ export async function listSubmissions(query = {}) {
 
 export async function getSubmission(id) {
   await settle();
+
+  // A counselling request carries its own detail, and has no student record
+  // behind it: the form is the only thing the student filled in.
+  const request = live.requests.find(row => row.id === id);
+  if (request) {
+    return copy({ submission: requestToSubmission(request), student: null, detail: request });
+  }
+
   const submission = store.submissions.find(s => s.id === id);
   if (!submission) return null;
   const student = store.students.find(s => s.id === submission.student_ref) || null;
@@ -598,6 +786,12 @@ export async function updateSubmissionStatus(id, status) {
   if (!SUBMISSION_STATUSES.includes(status)) {
     throw new Error(`Unknown submission status: ${status}`);
   }
+
+  if (live.requests.some(row => row.id === id)) {
+    const updated = await updateCounsellingRequest(id, { status });
+    return copy(requestToSubmission(updated));
+  }
+
   const submission = store.submissions.find(s => s.id === id);
   if (!submission) return null;
   submission.status = status;
@@ -719,7 +913,7 @@ export async function getFeedbackSummary(range = {}) {
  */
 export async function getAnalytics(range = {}) {
   await settle();
-  const submissions = store.submissions.filter(s => withinRange(s.submitted_at, range.from, range.to));
+  const submissions = allSubmissions().filter(s => withinRange(s.submitted_at, range.from, range.to));
   const assessments = store.assessments.filter(a => withinRange(a.submitted_at, range.from, range.to));
   const feedback = store.feedback.filter(f => withinRange(f.submitted_at, range.from, range.to));
   const sessions = store.sessions.filter(s => withinRange(s.session_date, range.from, range.to));
@@ -783,7 +977,7 @@ export async function getExportRows(dataset, range = {}) {
   await settle();
   const inRange = (value) => withinRange(value, range.from, range.to);
   if (dataset === 'submissions') {
-    return copy(store.submissions
+    return copy(allSubmissions()
       .filter(s => inRange(s.submitted_at))
       .map(({ id, student_id, student_name, form_type, submitted_at, status }) =>
         ({ id, student_id, student_name, form_type, submitted_at, status })));
@@ -842,19 +1036,69 @@ export async function markAllNotificationsRead() {
 
 /* ---- profile & preferences ---- */
 
+/** Initials for the avatar, from whatever the counsellor calls themselves. */
+function initialsFor(name) {
+  const letters = String(name || '').replace(/[^A-Za-z ]/g, '').split(/\s+/).filter(Boolean);
+  return letters.slice(0, 2).map(part => part[0].toUpperCase()).join('') || 'C';
+}
+
+/**
+ * The signed-in counsellor, from counsellor_profiles.
+ *
+ * The row is created by the trigger in supabase/migrations when the account
+ * is invited, so it is normally there. If the read fails the dashboard still
+ * has to render a sidebar, so the placeholder shape is used and the failure
+ * is logged rather than thrown.
+ */
 export async function getProfile() {
-  await settle();
+  const supabase = getSupabase();
+  if (!supabase) {
+    await settle();
+    return copy(store.profile);
+  }
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return copy(store.profile);
+
+  const { data, error } = await supabase
+    .from('counsellor_profiles')
+    .select('user_id,full_name,role,department,initials,avatar_url,email')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (error) describeError(error);
+
+  store.profile = {
+    ...DEFAULT_PROFILE,
+    ...(data || {}),
+    email: data?.email || user.email || DEFAULT_PROFILE.email,
+    initials: data?.initials || initialsFor(data?.full_name || user.email)
+  };
   return copy(store.profile);
 }
 
 export async function updateProfile(patch) {
-  await settle();
-  store.profile = { ...store.profile, ...patch };
-  const name = store.profile.full_name.trim();
-  store.profile.initials = name
-    ? name.replace(/[^A-Za-z ]/g, '').split(/\s+/).filter(Boolean).slice(0, 2)
-        .map(part => part[0].toUpperCase()).join('') || 'C'
-    : 'C';
+  const next = { ...store.profile, ...patch };
+  next.initials = initialsFor(next.full_name);
+
+  const supabase = getSupabase();
+  if (supabase && store.profile.user_id) {
+    const { error } = await supabase
+      .from('counsellor_profiles')
+      .update({
+        full_name: next.full_name,
+        email: next.email,
+        role: next.role,
+        department: next.department,
+        initials: next.initials
+      })
+      .eq('user_id', store.profile.user_id);
+    if (error) throw new Error(describeError(error, 'Your profile could not be saved.'));
+  } else {
+    await settle();
+  }
+
+  store.profile = next;
   return copy(store.profile);
 }
 
@@ -873,7 +1117,11 @@ export async function updatePreferences(patch) {
 export async function resetDemoData() {
   await settle();
   const preferences = { ...store.preferences };
+  const profile = { ...store.profile };
   store = createStore();
   store.preferences = preferences;
+  // The signed-in counsellor is not demonstration data, and neither are the
+  // live counselling requests — `live` is deliberately outside `store`.
+  store.profile = profile;
   return true;
 }

@@ -77,13 +77,20 @@ export async function mountSettings(container, { onProfileChange, onPreferencesC
           toast('Enter an email address in the form name@example.com.', 'warning');
           return;
         }
-        const updated = await updateProfile({
-          full_name: fullName,
-          email,
-          department: String(data.get('department') || '').trim(),
-          role: String(data.get('role') || '').trim(),
-          ...(pendingAvatar ? { avatar_url: pendingAvatar } : {})
-        });
+        // The profile is a database row now, so saving can fail.
+        let updated;
+        try {
+          updated = await updateProfile({
+            full_name: fullName,
+            email,
+            department: String(data.get('department') || '').trim(),
+            role: String(data.get('role') || '').trim(),
+            ...(pendingAvatar ? { avatar_url: pendingAvatar } : {})
+          });
+        } catch (error) {
+          toast(error.message, 'warning');
+          return;
+        }
         if (!updated.avatar_url) avatarPreview.replaceChildren(h('span', {}, updated.initials));
         onProfileChange(updated);
         toast('Profile saved.');
@@ -100,10 +107,14 @@ export async function mountSettings(container, { onProfileChange, onPreferencesC
                 type: 'button', class: 'button button-quiet button-small',
                 onclick: async () => {
                   pendingAvatar = '';
-                  const updated = await updateProfile({ avatar_url: '' });
-                  avatarPreview.replaceChildren(h('span', {}, updated.initials));
-                  onProfileChange(updated);
-                  toast('Profile picture removed.');
+                  try {
+                    const updated = await updateProfile({ avatar_url: '' });
+                    avatarPreview.replaceChildren(h('span', {}, updated.initials));
+                    onProfileChange(updated);
+                    toast('Profile picture removed.');
+                  } catch (error) {
+                    toast(error.message, 'warning');
+                  }
                 }
               }, 'Remove')
             : null,
