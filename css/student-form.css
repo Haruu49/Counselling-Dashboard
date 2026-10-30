@@ -1,0 +1,306 @@
+/* ==========================================================================
+   student-form.css — the public counselling request form.
+
+   Loaded after dashboard.css (tokens, base type) and components.css
+   (buttons, cards), and the only stylesheet specific to this page.
+
+   Written mobile-first: most students open this on a phone, so the single
+   column is the base case and the wider layouts are the exception.
+   ========================================================================== */
+
+.student-page {
+  background: var(--warm-white);
+  color: var(--ink);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --------------------------------------------------------------------------
+   Page furniture
+   -------------------------------------------------------------------------- */
+
+.student-topbar {
+  background: var(--white);
+  border-bottom: 1px solid var(--hairline);
+  padding: var(--space-4);
+}
+
+.student-brand {
+  max-width: 44rem;
+  margin: 0 auto;
+  display: grid;
+  gap: 2px;
+}
+
+.student-brand strong { font-size: var(--text-md); }
+.student-brand span { font-size: var(--text-sm); color: var(--ink-3); }
+
+.student-main {
+  flex: 1;
+  width: 100%;
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-8);
+}
+
+.student-main:focus { outline: none; }
+
+.student-footer {
+  border-top: 1px solid var(--hairline);
+  padding: var(--space-5) var(--space-4);
+}
+
+.student-footer p {
+  max-width: 44rem;
+  margin: 0 auto;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.student-card { padding: var(--space-6) var(--space-5); }
+.student-title { font-size: var(--text-2xl); margin: 0 0 var(--space-2); }
+
+.student-lede {
+  margin: 0 0 var(--space-6);
+  color: var(--ink-2);
+  font-size: var(--text-md);
+}
+
+/* --------------------------------------------------------------------------
+   Sections and fields
+   -------------------------------------------------------------------------- */
+
+.student-form { display: grid; gap: var(--space-7); }
+
+.form-section { display: grid; gap: var(--space-5); }
+
+.form-section-title {
+  font-size: var(--text-lg);
+  margin: 0;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.form-section-hint { margin: calc(var(--space-4) * -1) 0 0; font-size: var(--text-sm); color: var(--ink-3); }
+
+.form-row { display: grid; gap: var(--space-2); }
+
+/* `display` on .form-row would otherwise beat the user-agent rule for
+   [hidden], and the "Other" text field would never actually hide. */
+.form-row[hidden],
+.student-form [hidden] { display: none; }
+
+.form-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.form-fieldset legend { padding: 0; }
+
+/* Block, not flex: a flex row pushes the required mark to the far edge of a
+   label that wraps onto two lines, where it no longer reads as part of it. */
+.form-row .form-label,
+.form-fieldset legend.form-label {
+  display: block;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.form-row .form-label .required,
+.form-fieldset legend.form-label .required { margin-left: 2px; }
+
+.form-hint { margin: 0; font-size: var(--text-sm); color: var(--ink-3); }
+
+.form-control {
+  width: 100%;
+  font: inherit;
+  font-size: var(--text-md);
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-control);
+  /* 44px tall at the base font size: a comfortable touch target. */
+  padding: 0.65rem var(--space-3);
+}
+
+textarea.form-control { resize: vertical; line-height: 1.55; }
+
+.form-control:focus {
+  outline: none;
+  border-color: var(--teal-deep);
+  box-shadow: 0 0 0 3px var(--teal-tint);
+}
+
+.form-control::placeholder { color: var(--ink-4); }
+
+/* The message sits under its field and the field itself picks up the tone,
+   so the pairing is visible without relying on the colour alone. */
+.form-error {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--status-critical);
+}
+
+.has-error .form-control { border-color: var(--status-critical); }
+.has-error .form-control:focus { box-shadow: 0 0 0 3px var(--status-critical-tint); }
+.has-error > .form-label { color: var(--status-critical); }
+
+.form-row-other { margin-top: var(--space-2); padding-left: var(--space-4); border-left: 2px solid var(--teal-tint-strong); }
+
+/* --------------------------------------------------------------------------
+   Choices
+
+   The whole box is the target, not just the control, which matters most on a
+   phone. Checkbox and radio keep their native shapes so their meaning —
+   "many" against "one" — is never in doubt.
+   -------------------------------------------------------------------------- */
+
+.choice-row,
+.choice-grid { display: grid; gap: var(--space-2); }
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--white);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-control);
+  font-size: var(--text-md);
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.choice:hover { border-color: var(--teal); }
+
+.choice-input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--teal-deep);
+  cursor: pointer;
+}
+
+.choice:has(.choice-input:checked) {
+  border-color: var(--teal-deep);
+  background: var(--teal-tint);
+}
+
+.choice:focus-within {
+  border-color: var(--teal-deep);
+  box-shadow: 0 0 0 3px var(--teal-tint);
+}
+
+.has-error .choice { border-color: var(--status-critical); }
+
+/* --------------------------------------------------------------------------
+   Error summary
+
+   A long form on a phone can push an inline message well off screen, so every
+   message is repeated here and this takes focus when a submission fails.
+   -------------------------------------------------------------------------- */
+
+.form-summary {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--status-critical-tint);
+  border: 1px solid var(--status-critical);
+  border-radius: var(--radius-control);
+}
+
+.form-summary:focus { outline: 2px solid var(--status-critical); outline-offset: 2px; }
+.form-summary-title { margin: 0; font-size: var(--text-md); color: var(--status-critical); }
+.form-summary ul { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-1); list-style: disc; }
+.form-summary a { color: var(--status-critical); font-size: var(--text-base); }
+
+/* --------------------------------------------------------------------------
+   Submitting
+   -------------------------------------------------------------------------- */
+
+.form-foot {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.form-submit { justify-content: center; min-height: 48px; font-size: var(--text-md); }
+.form-submit[disabled] { opacity: 0.7; cursor: progress; }
+
+.form-status { margin: 0; font-size: var(--text-base); color: var(--ink-2); }
+.form-status.is-error { color: var(--status-critical); font-weight: 600; }
+
+/* The honeypot. Off screen rather than display:none, which some bots skip. */
+.no-fill {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   Confirmation
+   -------------------------------------------------------------------------- */
+
+.confirmation { display: grid; gap: var(--space-3); justify-items: start; }
+.confirmation:focus { outline: none; }
+
+.confirmation-mark {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: var(--radius-pill);
+  background: var(--status-good-tint);
+  color: var(--status-good);
+  font-size: var(--text-xl);
+  font-weight: 700;
+}
+
+.confirmation h1 { margin: 0; font-size: var(--text-xl); }
+.confirmation-lede { margin: 0; color: var(--ink-2); font-size: var(--text-md); }
+
+.confirmation-reference {
+  display: grid;
+  gap: 2px;
+  margin: var(--space-2) 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--teal-tint);
+  border-radius: var(--radius-control);
+}
+
+.confirmation-reference span { font-size: var(--text-xs); color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
+.confirmation-reference strong { font-size: var(--text-lg); }
+
+.confirmation-heading { margin: var(--space-3) 0 0; font-size: var(--text-md); }
+.confirmation-list { margin: 0; padding-left: var(--space-5); display: grid; gap: var(--space-1); color: var(--ink-2); list-style: disc; }
+
+.confirmation-urgent {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--status-warning-tint);
+  border-radius: var(--radius-control);
+  font-size: var(--text-base);
+}
+
+/* --------------------------------------------------------------------------
+   Wider screens
+
+   The form stays one column: a counselling form is read top to bottom, and
+   two columns of fields invite people to miss one. Only the choice lists and
+   the short paired fields spread out.
+   -------------------------------------------------------------------------- */
+
+@media (min-width: 40rem) {
+  .student-card { padding: var(--space-8) var(--space-7); }
+  .student-main { padding: var(--space-7) var(--space-5) var(--space-8); }
+
+  .choice-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .choice-grid { grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
+
+  .form-foot { grid-template-columns: auto 1fr; align-items: center; }
+  .form-foot .form-hint { grid-column: 1 / -1; }
+  .form-submit { justify-self: start; padding-inline: var(--space-7); }
+}

@@ -10,7 +10,8 @@ import {
 } from './ui.js';
 import {
   listSubmissions, getSubmission, updateSubmissionStatus,
-  FORM_TYPES, SUBMISSION_STATUSES, ASSESSMENT_MEASURES
+  listCounsellors, updateCounsellingRequest, counsellingRequestError,
+  FORM_TYPES, SUBMISSION_STATUSES, ASSESSMENT_MEASURES, REFERENCE_SOURCES
 } from './data.js';
 import { getQuery, setQuery, resetQuery, toggleSort, todayISO } from './state.js';
 
@@ -81,6 +82,11 @@ export async function openSubmissionDetail(id, { onUpdated = () => {} } = {}) {
     return;
   }
   const { submission, student, detail } = record;
+  const isRequest = submission.form_type === 'Counselling Request';
+
+  // Only a counselling request has office-use fields to fill in, and only
+  // then is the counsellor list worth a round trip.
+  const counsellors = isRequest ? await listCounsellors() : [];
 
   const statusRow = h('div', { class: 'status-actions' },
     h('p', { class: 'status-actions-label' }, 'Update status'),
@@ -100,7 +106,7 @@ export async function openSubmissionDetail(id, { onUpdated = () => {} } = {}) {
       }, status))));
 
   modal({
-    title: submission.form_type,
+    title: isRequest ? `Counselling ${detail.request_type.toLowerCase()}` : submission.form_type,
     subtitle: `${submission.student_name} · ${submission.student_id}`,
     size: 'large',
     body: h('div', { class: 'detail-body' },
@@ -111,19 +117,157 @@ export async function openSubmissionDetail(id, { onUpdated = () => {} } = {}) {
         ['Student ID', h('span', { class: 'mono' }, submission.student_id)],
         ['Student name', submission.student_name],
         student ? ['Programme', student.programme] : null,
-        student ? ['Semester', `Semester ${student.semester}`] : null,
+        student ? ['Semester', `Semester ${student.semester}`] : ['Semester', detail?.semester ?? '—'],
         ['Form type', submission.form_type],
-        ['Record ID', h('span', { class: 'mono' }, submission.id)]
+        isRequest
+          ? ['Reference', h('span', { class: 'mono' }, detail.reference_code)]
+          : ['Record ID', h('span', { class: 'mono' }, submission.id)]
       ]),
       detailBody(submission.form_type, detail),
-      statusRow),
+      statusRow,
+      isRequest
+        ? officeUsePanel({ request: detail, counsellors, onSaved: () => { announceChange(); onUpdated(); } })
+        : null),
     actions: h('button', { type: 'button', class: 'button button-quiet', onclick: () => closeModal() }, 'Close')
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Counselling request: the student's half, then the office's half
+ * ------------------------------------------------------------------ */
+
+/** Selected options as chips, with the "Other" text beside the Other chip. */
+function choiceChips(values, otherText) {
+  return h('div', { class: 'chip-row' },
+    (values || []).map(value => h('span', { class: 'chip chip-neutral' },
+      value === 'Other' && otherText ? `Other — ${otherText}` : value)));
+}
+
+function requestDetail(detail) {
+  return h('div', { class: 'detail-section' },
+    h('h3', { class: 'detail-heading' }, 'What the student asked for'),
+    detailList([
+      ['Request type', detail.request_type],
+      ['Received via', detail.channel],
+      ['Contact number', detail.contact_no],
+      ['Email', detail.email],
+      ['Purpose', choiceChips(detail.purposes, detail.purpose_other)],
+      ['Type of issue', choiceChips(detail.issues, detail.issue_other)]
+    ]),
+    h('p', { class: 'detail-label' }, 'In the student\u2019s own words'),
+    h('p', { class: 'detail-quote' }, detail.description));
+}
+
+/**
+ * The "For Office Use Only" half of the printed form. These are the only
+ * columns a counsellor may write: the database rejects any change to what the
+ * student submitted.
+ */
+function officeUsePanel({ request, counsellors, onSaved }) {
+  const message = h('p', { class: 'office-message', role: 'status' });
+
+  const source = h('select', { class: 'select-input', id: 'office-source' });
+  source.append(h('option', { value: '' }, 'Not recorded'));
+  REFERENCE_SOURCES.forEach(value => {
+    const option = h('option', { value }, value);
+    if (value === request.reference_source) option.selected = true;
+    source.append(option);
+  });
+
+  const when = splitTimestamp(request.appointment_at);
+  const date = h('input', { type: 'date', class: 'date-input', id: 'office-date', value: when.date });
+  const time = h('input', { type: 'time', class: 'date-input', id: 'office-time', value: when.time });
+
+  const assigned = h('select', { class: 'select-input', id: 'office-counsellor' });
+  assigned.append(h('option', { value: '' }, 'Unassigned'));
+  counsellors.forEach(counsellor => {
+    const option = h('option', { value: counsellor.user_id }, counsellor.full_name);
+    if (counsellor.user_id === request.assigned_counsellor_id) option.selected = true;
+    assigned.append(option);
+  });
+
+  const notes = h('textarea', {
+    class: 'textarea-input', id: 'office-notes', rows: 3,
+    placeholder: 'Anything the office needs to remember about this request.'
+  });
+  notes.value = request.office_notes || '';
+
+  const save = h('button', { type: 'submit', class: 'button button-primary button-small' },
+    icon('save', 15), h('span', {}, 'Save office details'));
+
+  const form = h('form', {
+    class: 'office-form',
+    onsubmit: async event => {
+      event.preventDefault();
+      message.textContent = '';
+      message.classList.remove('is-error');
+
+      if (time.value && !date.value) {
+        message.textContent = 'Choose an appointment date as well as a time.';
+        message.classList.add('is-error');
+        date.focus();
+        return;
+      }
+
+      save.disabled = true;
+      try {
+        await updateCounsellingRequest(request.id, {
+          reference_source: source.value,
+          appointment_at: date.value
+            ? new Date(`${date.value}T${time.value || '09:00'}`).toISOString()
+            : null,
+          assigned_counsellor_id: assigned.value,
+          office_notes: notes.value.trim()
+        });
+        toast('Office details saved.');
+        closeModal();
+        onSaved();
+      } catch (error) {
+        message.textContent = error.message;
+        message.classList.add('is-error');
+        save.disabled = false;
+      }
+    }
+  },
+    h('div', { class: 'office-grid' },
+      h('label', { class: 'form-field' },
+        h('span', { class: 'form-label', for: 'office-source' }, 'Reference source'), source),
+      h('label', { class: 'form-field' },
+        h('span', { class: 'form-label', for: 'office-counsellor' }, 'Assigned counsellor'), assigned),
+      h('label', { class: 'form-field' },
+        h('span', { class: 'form-label', for: 'office-date' }, 'Appointment date'), date),
+      h('label', { class: 'form-field' },
+        h('span', { class: 'form-label', for: 'office-time' }, 'Appointment time'), time)),
+    h('label', { class: 'form-field' },
+      h('span', { class: 'form-label', for: 'office-notes' }, 'Office notes'), notes),
+    h('div', { class: 'form-actions' }, save, message));
+
+  return h('fieldset', { class: 'fieldset office-panel' },
+    h('legend', {}, 'For office use only'),
+    h('p', { class: 'detail-hint' },
+      'Visible to counsellors only. The student\u2019s own answers above cannot be edited.'),
+    form);
+}
+
+/** An ISO timestamp as the local date and time an <input> expects. */
+function splitTimestamp(value) {
+  if (!value) return { date: '', time: '' };
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return { date: '', time: '' };
+  const pad = number => String(number).padStart(2, '0');
+  return {
+    date: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`,
+    time: `${pad(at.getHours())}:${pad(at.getMinutes())}`
+  };
 }
 
 /** The form-specific half of the detail dialog. */
 function detailBody(formType, detail) {
   if (!detail) return null;
+
+  if (formType === 'Counselling Request') {
+    return requestDetail(detail);
+  }
 
   if (formType === 'Counselling Registration') {
     return h('div', { class: 'detail-section' },
@@ -173,6 +317,14 @@ function measureTone(measure, value) {
  * Page
  * ------------------------------------------------------------------ */
 
+/**
+ * Counselling requests are real rows from Supabase; the other three form
+ * types are the in-memory demonstration set. Saying so on the page matters:
+ * the old blanket "everything here is fictional" notice is no longer true.
+ */
+export const LIVE_AND_DEMO_NOTICE =
+  'Counselling requests are live records. Registrations, assessments and feedback are fictional demonstration data.';
+
 export async function mountSubmissions(container) {
   const PAGE = 'submissions';
   const region = h('div', { class: 'region' }, tableSkeleton(8, 6));
@@ -207,7 +359,7 @@ export async function mountSubmissions(container) {
       title: 'Student Submissions',
       description: 'Every counselling form submitted by a student, newest first.'
     }),
-    demoNotice(),
+    demoNotice(LIVE_AND_DEMO_NOTICE),
     h('section', { class: 'card' },
       h('header', { class: 'card-head' },
         h('div', { class: 'card-head-text' },
@@ -216,6 +368,13 @@ export async function mountSubmissions(container) {
       controls.node,
       region)
   );
+
+  // app.js raises this after it has re-read the queue.
+  const onLiveChange = () => render();
+  document.addEventListener('requests:changed', onLiveChange);
+  container.addEventListener('page:unmount', () => {
+    document.removeEventListener('requests:changed', onLiveChange);
+  });
 
   async function render() {
     controls.sync();

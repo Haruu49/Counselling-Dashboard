@@ -11,7 +11,9 @@ import {
 } from './ui.js';
 import { getOverviewStats, getAnalytics, listSubmissions, getExportRows, FORM_TYPES, SUBMISSION_STATUSES } from './data.js';
 import { getQuery, setQuery, toggleSort, rangeFromPreset } from './state.js';
-import { submissionColumns, openSubmissionDetail, buildToolbar, onSubmissionChange } from './submissions.js';
+import {
+  submissionColumns, openSubmissionDetail, buildToolbar, onSubmissionChange, LIVE_AND_DEMO_NOTICE
+} from './submissions.js';
 import {
   wellbeingDistributionCard, submissionsTrendCard, categoriesCard, satisfactionCard
 } from './charts.js';
@@ -47,7 +49,7 @@ export async function mountOverview(container, { profile }) {
       title: greeting(profile.full_name),
       description: `Here is what has come in across the counselling service. Today is ${formatDate(new Date().toISOString())}.`
     }),
-    demoNotice(),
+    demoNotice(LIVE_AND_DEMO_NOTICE),
     statsRegion,
     quickActions(),
     chartRegion,
@@ -198,7 +200,16 @@ export async function mountOverview(container, { profile }) {
   }
 
   const stop = onSubmissionChange(() => { renderStats(); renderCharts(); });
-  container.addEventListener('page:unmount', stop, { once: true });
+
+  // A counselling request arriving changes the headline counts and the
+  // recent table, so the overview follows the queue without a refresh.
+  const onLiveChange = () => { renderStats(); renderTable(); };
+  document.addEventListener('requests:changed', onLiveChange);
+
+  container.addEventListener('page:unmount', () => {
+    stop();
+    document.removeEventListener('requests:changed', onLiveChange);
+  }, { once: true });
 
   await Promise.all([renderStats(), renderCharts(), renderTable()]);
 }

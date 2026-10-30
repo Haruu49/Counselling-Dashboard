@@ -10,7 +10,9 @@ import {
   h, icon, paintIcons, toast, confirmDialog, closeModal, clear, formatDate, debounce
 } from './ui.js';
 import { ROUTES, NAV_SECTIONS, initRouter, currentRoute, navigate, routeById, defineRoutes, handlerFor } from './router.js';
-import { getProfile, getPreferences, updatePreferences } from './data.js';
+import { getProfile, getPreferences, updatePreferences, refreshCounsellingRequests } from './data.js';
+import { isConfigured, currentSession, promptSignIn, renderConfigurationNeeded, signOut as endSupabaseSession, onSignedOut } from './auth.js';
+import { subscribeToRequests, unsubscribeFromRequests } from './realtime.js';
 import { loadStoredPreferences, storePreferences, setQuery } from './state.js';
 import { createNotificationMenu, closeNotificationMenu, refreshBadge } from './notifications.js';
 import { destroyAll, setChartMotion } from './charts.js';
@@ -98,7 +100,7 @@ function renderSidebar(activeId) {
           h('small', {}, profile.role))),
       h('p', { class: 'sidebar-note' },
         icon('shield', 14),
-        h('span', {}, 'Phase 1 prototype · fictional data')))
+        h('span', {}, 'Invited counsellors only · live requests')))
   );
 
   paintIcons(shell.sidebar);
@@ -302,33 +304,43 @@ function closeMobileNav() {
  * Sign out
  * ------------------------------------------------------------------ */
 
+/** True while this tab is deliberately ending its own session. */
+let signingOut = false;
+
 async function signOut() {
   const ok = await confirmDialog({
-    title: 'Log out of the prototype?',
-    body: 'This is a frontend demonstration, so there is no real session to end. You can sign straight back in.',
+    title: 'Log out of the dashboard?',
+    body: 'Your session will end on this device. You will need to sign in again to open the counselling request queue.',
     confirmLabel: 'Log out'
   });
   if (!ok) return;
 
+  signingOut = true;
+  await endSupabaseSession();
+  signingOut = false;
+  await returnToSignIn();
+}
+
+/**
+ * Tears the dashboard down and shows the sign-in screen again. Used by the
+ * logout button and by a session that ends elsewhere — in another tab, or
+ * because a token could not be refreshed.
+ */
+async function returnToSignIn(notice = null) {
+  unsubscribeFromRequests();
   destroyAll();
+  closeModal();
   closeMobileNav();
-  document.body.classList.add('is-signed-out');
-  clear(shell.main);
-  shell.main.append(
-    h('section', { class: 'signed-out' },
-      h('span', { class: 'signed-out-mark' }, icon('heart-handshake', 26)),
-      h('h1', {}, 'You have been logged out'),
-      h('p', {}, 'Phase 1 has no authentication. Supabase Authentication arrives in a later phase, and until then this screen is the whole sign-out flow.'),
-      h('button', {
-        type: 'button', class: 'button button-primary',
-        onclick: () => {
-          document.body.classList.remove('is-signed-out');
-          mountRoute(routeById('overview'));
-          navigate('overview');
-        }
-      }, 'Sign back in'))
-  );
-  paintIcons(shell.main);
+  closeNotificationMenu();
+
+  activeContainer = null;
+  topbar = null;
+  clear(shell.sidebar);
+  clear(shell.topbar);
+
+  await promptSignIn(shell.main);
+  if (notice) toast(notice, 'warning');
+  await boot();
 }
 
 /* ------------------------------------------------------------------ *
@@ -423,7 +435,14 @@ function applyPreferences() {
  * Bootstrap
  * ------------------------------------------------------------------ */
 
-async function start() {
+/**
+ * Boots the dashboard for a signed-in counsellor. Called after sign-in, and
+ * again if the counsellor signs out and back in without reloading, so
+ * everything it builds is either cleared first or replaced in place.
+ */
+async function boot() {
+  document.body.classList.remove('is-signed-out');
+
   profile = await getProfile();
 
   // Stored display preferences win over the defaults, if any were saved.
@@ -434,6 +453,36 @@ async function start() {
 
   buildTopbar();
 
+  // Read the live queue once before the first page renders, so the counts on
+  // the overview are right the first time rather than a beat later.
+  await refreshCounsellingRequests();
+  startRealtime();
+
+  initRouter({
+    landing: preferences.default_page,
+    onNavigate: route => mountRoute(route)
+  });
+
+  await refreshBadge();
+}
+
+/**
+ * Keeps the queue live. Every event re-reads the table and tells the mounted
+ * page to re-render; nothing is taken from the event payload itself.
+ */
+function startRealtime() {
+  subscribeToRequests({
+    onChange: async () => {
+      const { added } = await refreshCounsellingRequests();
+      await refreshBadge();
+      added.forEach(row => toast(`New counselling request from ${row.student_name}.`));
+      document.dispatchEvent(new CustomEvent('requests:changed'));
+    }
+  });
+}
+
+async function start() {
+  // The shell is listening before anything can need it.
   shell.overlay.addEventListener('click', closeMobileNav);
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && document.body.classList.contains('is-nav-open')) closeMobileNav();
@@ -443,13 +492,23 @@ async function start() {
     if (event.target.closest('.nav-link')) closeMobileNav();
   });
 
-  initRouter({
-    landing: preferences.default_page,
-    onNavigate: route => mountRoute(route)
+  document.body.classList.remove('is-booting');
+
+  // Without js/config.js there is no project to sign in to. The dashboard
+  // reads real student records, so it does not fall back to anything.
+  if (!isConfigured()) {
+    renderConfigurationNeeded(shell.main);
+    return;
+  }
+
+  if (!(await currentSession())) await promptSignIn(shell.main);
+
+  onSignedOut(() => {
+    if (signingOut) return;
+    returnToSignIn('Your session ended. Please sign in again.');
   });
 
-  await refreshBadge();
-  document.body.classList.remove('is-booting');
+  await boot();
 }
 
 start().catch(error => {

@@ -1,0 +1,10 @@
+# Supabase CLI configuration.
+#
+# The submission endpoint is called by students, who have no session, so JWT
+# verification must stay off for that one function. Everything it accepts is
+# re-validated in validation.ts before anything is written.
+
+project_id = "counselling-dashboard"
+
+[functions.submit-counselling-request]
+verify_jwt = false

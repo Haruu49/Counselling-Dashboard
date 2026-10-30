@@ -1,0 +1,14 @@
+# Supabase credentials. Copy js/config.example.js to js/config.js and fill it
+# in; it is per-deployment and never committed. A service-role key must not
+# appear in it, or anywhere else the browser can read.
+js/config.js
+
+# Edge function secrets, if a local Supabase CLI is used.
+supabase/.env
+supabase/.env.local
+supabase/.branches/
+supabase/.temp/
+
+# Test artefacts
+tests/output/
+node_modules/

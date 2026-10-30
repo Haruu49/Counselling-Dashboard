@@ -160,6 +160,7 @@ export function bandChip(band) {
 
 export function formTypeChip(formType) {
   const short = {
+    'Counselling Request': 'Request',
     'Counselling Registration': 'Registration',
     'Wellbeing Assessment': 'Assessment',
     'Counselling Feedback': 'Feedback'

@@ -1,14 +1,22 @@
 # Counselling Dashboard
 
-A university student counselling management dashboard. **Phase 1: frontend only.**
+A university student counselling management dashboard, plus the student-facing
+counselling request form that feeds it.
 
-Counsellors can monitor student counselling activity, read form submissions, follow
-wellbeing assessments, manage session feedback, and review aggregate statistics.
-Every record in this prototype is fictional and held in memory.
+Students fill in **`student-form.html`**, a public page based on the printed
+counselling form (GMI-RO-P04-F02). Their request is validated on the server, stored
+in Supabase, and appears in the counsellor's queue without a refresh. Counsellors
+sign in to read it and manage the "For Office Use Only" half.
 
-> **This is a demonstration prototype.** It has no authentication, no authorisation,
-> no server-side validation, no audit trail and no database. It must not be used to
-> manage real student counselling information.
+| Part | State |
+|---|---|
+| Counselling requests | **Live.** Real rows in Supabase, behind authentication and row level security. |
+| Registrations, wellbeing assessments, feedback, analytics | Fictional demonstration data, held in memory. |
+
+> **Still a prototype.** Counselling requests are stored for real, but the three
+> demonstration datasets are not, and there is no audit trail, retention policy or
+> privacy assessment yet. Use fictional data. Do not put real student counselling
+> information near it until the work listed under *Still to improve* is done.
 
 ---
 
@@ -22,10 +30,26 @@ cd Counselling-Dashboard
 python3 -m http.server 8000
 ```
 
-Then open <http://localhost:8000>.
+Then open <http://localhost:8000> for the dashboard, or
+<http://localhost:8000/student-form.html> for the student form.
 
 Any static server works (`npx serve`, `php -S localhost:8000`, the VS Code Live
 Server extension). There is no build step, no package manager and no install.
+
+**Both pages need `js/config.js` before they do anything.** It holds the Supabase
+project URL and publishable key, it is gitignored, and it is not in this repository:
+
+```sh
+cp js/config.example.js js/config.js
+# then paste in the URL and publishable key from Project Settings → API
+```
+
+Without it the dashboard shows a short setup screen instead of a sign-in form, and
+the student form says it is not available yet. See **Supabase setup** below for the
+database and the submission endpoint, which also have to exist.
+
+The dashboard requires a counsellor sign-in and will not fall back to demonstration
+mode: it reads real student requests, so there is no unauthenticated path into it.
 
 **An internet connection is needed on first load.** Chart.js, Lucide icons and the
 Source Sans 3 webfont come from CDNs. Without them the dashboard still runs: charts
@@ -44,8 +68,12 @@ size, and the type falls back to the system sans.
 | Charts | [Chart.js 4.4.1](https://www.chartjs.org/) via cdnjs |
 | Icons | [Lucide 0.460.0](https://lucide.dev) via jsDelivr |
 | Type | Source Sans 3 via Google Fonts |
+| Database, auth, realtime | [Supabase](https://supabase.com) — Postgres, GoTrue, Realtime |
+| Client library | `@supabase/supabase-js` 2.118.0 via jsDelivr (dashboard only) |
+| Submission endpoint | A Supabase Edge Function (Deno, TypeScript) |
 
-No React, Vue, Angular, Next.js, Bootstrap, Tailwind or external AI APIs.
+No React, Vue, Angular, Next.js, Bootstrap, Tailwind or external AI APIs. The
+student form loads no Supabase client at all — it posts to the edge function.
 
 ---
 
@@ -58,10 +86,20 @@ Counselling-Dashboard/
 ├── css/
 │   ├── dashboard.css       Design tokens, base styles, app layout
 │   ├── components.css      Reusable pieces (cards, tables, chips, dialogs…)
-│   └── responsive.css      Breakpoints, print and forced-colours
+│   ├── responsive.css      Breakpoints, print and forced-colours
+│   └── student-form.css    The student form only
+│
+├── student-form.html       The public student counselling request form
 │
 ├── js/
-│   ├── app.js              Shell, sidebar, top bar, route mounting, sign-out
+│   ├── app.js              Shell, sidebar, top bar, route mounting, auth gate
+│   ├── auth.js             Counsellor sign-in, session, sign-out
+│   ├── supabase.js         The one place a Supabase client is created
+│   ├── project-config.js   Reads the gitignored js/config.js
+│   ├── config.example.js   Template for js/config.js
+│   ├── realtime.js         The live subscription to the request queue
+│   ├── form-options.js     The printed form's lists, shared by both pages
+│   ├── student-form.js     The student form: build, validate, submit
 │   ├── router.js           Hash routing and the route table
 │   ├── data.js             Demonstration dataset + data access layer
 │   ├── state.js            View state, display preferences, date ranges
@@ -81,8 +119,21 @@ Counselling-Dashboard/
 │   ├── images/favicon.svg  Brand mark sized for a browser tab
 │   └── icons/              Brand mark + a note on the icon set
 │
+├── supabase/
+│   ├── config.toml                        CLI settings (verify_jwt off for the endpoint)
+│   ├── migrations/                        Tables, RLS policies, triggers, realtime
+│   └── functions/
+│       └── submit-counselling-request/
+│           ├── index.ts                   The public endpoint
+│           └── validation.ts              The submission rules, as a pure module
+│
 ├── tests/
-│   └── browser-checks.mjs  The 83 automated browser checks
+│   ├── browser-checks.mjs            Dashboard behaviour (needs a session)
+│   ├── dashboard-request-checks.mjs  The counsellor side, against a mocked Supabase
+│   ├── student-form-checks.mjs       The student form, endpoint intercepted
+│   ├── validation-checks.mjs         The edge function's rules, directly
+│   ├── sql-checks.sh                 The migration on a throwaway Postgres
+│   └── supabase-shim.sql             What that throwaway cluster needs first
 │
 ├── TESTING.md              Verification results and what is not covered
 └── README.md
@@ -117,10 +168,31 @@ plus `router.js`, `state.js`, `ui.js` and `csv.js` for concerns shared across pa
 - Four charts and a recent-submissions table with its own search, filters, sorting
   and pagination.
 
+### Student counselling request form
+`student-form.html`, public and mobile-first. Request or referral; name, student ID,
+semester, contact number and email; purpose and type of issue as checkboxes so more
+than one can be chosen, each with an "Other" box that reveals a short text field;
+and a free-text description that says plainly the student can share only what they
+feel comfortable sharing. The submission channel is recorded as `Online`
+automatically, and none of the "For Office Use Only" fields appear.
+
+Invalid fields get a message beside them, `aria-invalid`, and an entry in one
+summary at the top of the form that takes focus — a long form on a phone can push
+an inline message well off screen. Submitting shows a confirmation with a reference
+code the student can quote, what happens next, and where to go if they need help
+sooner than the queue allows.
+
 ### Student Submissions
 Search by student ID or name; filter by form type, status and date range; sort any
 column; paginate; open a submission to read the full form and change its status.
 The detail dialog adapts to the form type it is showing.
+
+Counselling requests appear here alongside the three demonstration form types, and
+arrive live. Opening one shows the student's details, every purpose and issue they
+chose, and their description — then, below it, the **For office use only** panel:
+reference source, appointment date and time, assigned counsellor and office notes.
+Those five columns are the only ones a counsellor can write. The database refuses
+any change to what the student submitted.
 
 ### Counselling Registration
 Student ID, name, programme, semester, reason category, the reason in the student's
@@ -195,64 +267,224 @@ number is reachable only by hovering.
 
 ---
 
-## Preparing for Supabase (Phase 2)
+## Supabase setup
 
-`js/data.js` is the only module that knows how a record is shaped or where it lives.
-Everything else goes through its exported functions, so Phase 2 replaces the bodies
-without touching a rendering module.
+Nothing in this repository is applied to a project automatically. These are the
+steps, in order. They need the [Supabase CLI](https://supabase.com/docs/guides/local-development)
+and an account with access to the project.
 
-- **Field names are snake_case**, matching the PostgreSQL columns they will become.
-- **Every accessor is `async`** and already awaited, with a simulated 90 ms latency
-  and real loading states, so nothing has to change shape when a real round trip
-  appears.
-- **Records and aggregates are separate.** `listSubmissions()` returns rows;
-  `getAnalytics()` returns counts and holds no student identity. The aggregate
-  functions can become database views or RPC calls.
-- **Filtering, sorting and pagination are already a query object** (`search`,
-  `status`, `from`, `to`, `sort_by`, `sort_dir`, `page`, `per_page`) handed to the
-  data layer, not applied in the page — the same shape a Supabase query takes.
-- **Reusable loaders, renderers, filters and status updates** live in `ui.js` and
-  `data.js` rather than being written out per page.
-- **Nothing is hardcoded in markup.** Reference lists (form types, statuses,
-  programmes, categories) are exported from `data.js` and become lookup tables.
+**1. Link the project.**
 
-Phase 2 must add row level security, role-based access control, server-side
-validation, audit logging and data retention rules before any real counselling
-information goes near it. **No Supabase project, credentials, authentication or
-realtime connection exists in Phase 1**, and nothing here performs a live database
-update.
+```sh
+supabase login
+supabase link --project-ref YOUR-PROJECT-REF
+```
+
+**2. Apply the migration.** It creates `counselling_requests`,
+`counsellor_profiles` and `submission_throttle`, their RLS policies, the triggers,
+and adds the requests table to the realtime publication.
+
+```sh
+supabase db push
+```
+
+Without the CLI, paste `supabase/migrations/20261030120000_counselling_requests.sql`
+into the SQL editor in the Supabase dashboard and run it once.
+
+**3. Deploy the submission endpoint.** JWT verification must be off: the caller is
+a student with no session. `supabase/config.toml` already sets this, and the flag
+is repeated here for anyone deploying without it.
+
+```sh
+supabase functions deploy submit-counselling-request --no-verify-jwt
+supabase secrets set SUBMISSION_THROTTLE_SALT="$(openssl rand -hex 16)"
+```
+
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected by the platform. Two
+optional secrets: `SUBMISSION_HOURLY_LIMIT` (default 5) and `ALLOWED_ORIGINS`
+(default `*` — set it to the site's origin once that is known).
+
+**4. Close public sign-up.** Authentication → Providers → Email: turn
+**Allow new users to sign up** off. Counsellor accounts are invite-only, and the
+trigger in the migration admits any new auth user to the queue, so this is what
+keeps the queue closed.
+
+**5. Create a counsellor.** Authentication → Users → **Add user**, with
+*Auto Confirm User* ticked. The trigger creates their `counsellor_profiles` row,
+which is what grants access; they can change their display name under Settings.
+To remove someone's access later, set `active = false` on that row rather than
+deleting it, so their name still resolves on the requests they handled.
+
+**6. Point the pages at the project.**
+
+```sh
+cp js/config.example.js js/config.js
+```
+
+Fill in the project URL and the **publishable** key. Both are safe in a browser.
+The service-role key is a different key and belongs only in the edge function's
+environment — never in `js/config.js`, never under `js/`, never committed.
 
 ---
 
+## How a submission travels
+
+```
+student-form.html
+      │  POST, no session, publishable key only
+      ▼
+submit-counselling-request  (edge function, verify_jwt off)
+      │  validation.ts re-checks every field
+      │  office-use fields dropped, channel forced to 'Online'
+      │  per-hour throttle on a salted hash of the caller's address
+      │  service-role key, held only in the function's environment
+      ▼
+public.counselling_requests   anon has no policy and no grant
+      │
+      │  Postgres WAL → supabase_realtime publication
+      ▼
+the counsellor's subscription   RLS applied per subscriber
+      │
+      ▼
+data.js re-reads the queue → the page re-renders
+```
+
+Two details worth keeping:
+
+- **The student form holds no database access at all.** `anon` has no policy and no
+  grant on `counselling_requests`, so there is nothing for a student's browser key
+  to read even if someone tried. The edge function is the only way in.
+- **Realtime events carry nothing into the app.** An event means "something
+  changed"; the data layer then re-reads the table. That costs one query and keeps
+  the queue correct when events are coalesced, arrive out of order, or are missed
+  during a reconnect.
+
+---
+
+## Access rules
+
+| Who | `counselling_requests` |
+|---|---|
+| A student (`anon`) | Nothing. No policy, and the grants are revoked explicitly. |
+| A signed-in non-counsellor | Nothing. `is_counsellor()` is false, so no row matches. |
+| An active counsellor | Read, update the office-use columns, insert an offline request. |
+| A deactivated counsellor | Nothing, from the moment `active` goes false. |
+| Anyone | No delete. There is no DELETE policy for any role. |
+| The edge function (`service_role`) | Insert, bypassing RLS, from the server only. |
+
+A submitted request is a record of what a student wrote, so the student-supplied
+columns are frozen at insert by `counselling_requests_freeze_submission()`. A
+counsellor updating `description` or `student_name` gets an exception, not a
+silent write — enforced in the database, not only in the interface.
+
+`tests/sql-checks.sh` asserts every row of that table by attempting it as the role
+in question.
+
+---
+
+## Keeping the data layer honest
+
+`js/data.js` is still the only module that knows how a record is shaped or where it
+lives. What changed is that some records now come from Postgres:
+
+- Live requests are cached in `live`, deliberately outside `store`, and merged into
+  the submission accessors by `allSubmissions()`. Every page kept its existing
+  call — `listSubmissions()`, `getSubmission()`, `updateSubmissionStatus()` — and
+  none of them had to learn where a row came from.
+- The reference lists moved to `form-options.js`, which has no imports, so the
+  student form can share them without loading a Supabase client. `data.js`
+  re-exports them, so nothing else had to change.
+- The same lists exist in three places that must agree: `form-options.js`,
+  `validation.ts`, and the CHECK constraints. `tests/validation-checks.mjs` fails
+  if the first two drift apart.
+
 ## Security and privacy
 
-- Every student, counsellor, submission and comment is fictional.
-- The counsellor profile is held in memory. Only non-identifying display preferences
-  (density, landing page, reduced motion, notification toggles) are written to
-  `localStorage`, under one clearly named key, and every read and write is wrapped so
-  blocked storage degrades instead of throwing.
-- No student record, name, identifier or comment is ever written to browser storage.
-  The test suite asserts this.
+**Credentials**
+
+- `js/config.js` is gitignored and holds only the project URL and the publishable
+  key, both of which are designed to be public.
+- The service-role key exists only inside the edge function's environment, injected
+  by the platform. It is in no file in this repository and reaches no browser.
+- No key is fabricated anywhere in the repo; `js/config.example.js` ships
+  placeholders.
+
+**Access**
+
+- Counsellor accounts are invite-only. There is no sign-up form, and public sign-up
+  must be turned off in the project (step 4 of **Supabase setup**).
+- The sign-in form gives the same message for an unknown address and a wrong
+  password, so it cannot be used to find out who has an account.
+- RLS is enabled *and forced* on every exposed table. See **Access rules**.
+- The dashboard renders nothing before a session exists, so there is no
+  unauthenticated path to a page that would try to read student records.
+
+**Student data**
+
+- A student cannot read any submission, including their own: there is no read path
+  for `anon` at all.
+- The counsellor session is kept in `localStorage` under `counselling-dashboard-auth`.
+  No student record, name, identifier or comment is ever written to browser storage,
+  and both test suites assert it.
+- Display preferences (density, landing page, reduced motion, notification toggles)
+  are the only other thing stored, under one clearly named key, with every read and
+  write wrapped so blocked storage degrades instead of throwing.
 - Analytics shows counts only; no individual is identified on that page.
 - Counselling notes are not surfaced on the overview; reading one takes a deliberate
   click into a detail dialog.
 - A profile picture chosen in Settings stays in the browser tab as an object URL and
   is never uploaded.
-- **Frontend behaviour is not security.** None of the above is an access control.
+- A PostgREST error is logged to the console but never shown to a student or a
+  counsellor as-is, because the message can quote row contents back.
+
+**The public endpoint**
+
+- Every field is re-validated server-side; the browser's copy of the rules exists
+  only to give a quick, kind message.
+- The payload is rebuilt key by key rather than spread, so no office-use field,
+  status or id can ride in on it.
+- A honeypot field and a per-hour limit on a salted hash of the caller's address.
+  No raw address is stored.
+- The body size is capped before it is parsed.
+
+**Still not covered.** No audit log, no retention or deletion policy, no rate limit
+on sign-in attempts, no privacy assessment, and no penetration test. Those come
+before real counselling information.
 
 ---
 
 ## Verification
 
-83 automated browser checks pass against Chromium — boot, all seven routes, the
-unknown-route fallback, chart rendering, search, every filter, sorting, pagination,
-the detail dialog and status updates, notifications, the profile menu, all five CSV
-downloads, settings validation and persistence, state surviving navigation, logout
-and sign-in, keyboard focus, the mobile drawer, table restacking, sidebar collapse,
-and no horizontal overflow at 1440 / 1280 / 1024 / 768 / 414 / 360px.
+Four suites, run independently. None of them touches a live Supabase project.
 
-The run finishes with no console errors, no uncaught page errors and no failed
-network requests. See `TESTING.md` for the full list and what is not covered.
+| Suite | What it covers | Needs |
+|---|---|---|
+| `tests/sql-checks.sh` | The migration and every access rule, applied to a throwaway local Postgres and attempted as each role | Postgres 16 server binaries |
+| `tests/validation-checks.mjs` | The edge function's rules, imported directly | Node 22.6+ |
+| `tests/student-form-checks.mjs` | The student form end to end, endpoint intercepted | Playwright, a static server |
+| `tests/dashboard-request-checks.mjs` | The counsellor side against a mocked Supabase | Playwright, a static server |
+| `tests/browser-checks.mjs` | The existing dashboard behaviour | Playwright, a static server, **and a counsellor account** |
+
+```sh
+./tests/sql-checks.sh
+node tests/validation-checks.mjs
+
+npm install --no-save playwright && npx playwright install chromium
+python3 -m http.server 8000 &
+BASE_URL=http://localhost:8000/ node tests/student-form-checks.mjs
+BASE_URL=http://localhost:8000/ node tests/dashboard-request-checks.mjs
+BASE_URL=http://localhost:8000/ \
+  TEST_COUNSELLOR_EMAIL=... TEST_COUNSELLOR_PASSWORD=... \
+  node tests/browser-checks.mjs
+```
+
+`browser-checks.mjs` now needs a real session for everything past the sign-in
+screen. Without those two variables it checks the gate — that an unauthenticated
+visitor gets a sign-in form, that no student record renders behind it, and that
+there is no sign-up link — then reports the rest as skipped rather than failing.
+Use a fictional account, never a real counsellor's.
+
+See `TESTING.md` for the full list and what is not covered.
 
 ---
 
@@ -265,7 +497,15 @@ network requests. See `TESTING.md` for the full list and what is not covered.
 - **No dark mode.** The brief specifies a light warm-white palette and the dashboard
   implements only that. A dark theme would need its own validated chart steps rather
   than an inverted copy.
-- **Demonstration data resets on reload.** Status changes live in memory by design.
+- **Demonstration data resets on reload.** The three demonstration form types live
+  in memory by design. Counselling requests are stored and do not reset.
+- **Realtime is best-effort.** If the socket drops, the queue still refreshes on
+  navigation and on any action that re-reads it; the console says when the channel
+  errored. There is no reconnection banner yet.
+- **The realtime socket itself is not covered by an automated test.** The suites
+  assert that the subscription is opened to the right project and that the handler's
+  work — re-read, then re-render — produces the right result, but nothing drives a
+  real Postgres event end to end.
 - **Lucide ships as one 356 KB bundle.** Fine locally; a production build should
   subset to the roughly 40 icons actually used.
 - **Search covers student ID, name and feedback comments only** — not reasons given
@@ -277,6 +517,10 @@ network requests. See `TESTING.md` for the full list and what is not covered.
 
 ## Still to improve
 
+- An audit log of who read or changed which request, and a retention policy.
+- Rate limiting and lockout on sign-in attempts.
+- Letting a student check the status of their own request from the reference code,
+  which needs a second endpoint rather than any read access to the table.
 - Vendor the CDN libraries locally and subset the icon set.
 - Automated accessibility auditing (axe) and a screen-reader pass; the current checks
   cover focus visibility, keyboard paths, landmarks and ARIA attributes, not a full
