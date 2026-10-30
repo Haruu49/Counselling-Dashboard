@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Counselling Dashboard mark">
+  <rect width="48" height="48" rx="12" fill="#588F83"/>
+  <path d="M24 36.5s-10.5-6.1-10.5-13.7a6 6 0 0 1 10.5-3.9 6 6 0 0 1 10.5 3.9C34.5 30.4 24 36.5 24 36.5Z"
+        fill="none" stroke="#FAFAF7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="24" cy="23" r="2.4" fill="#A3B18A"/>
+</svg>

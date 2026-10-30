@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Counselling Dashboard">
+  <rect width="32" height="32" rx="8" fill="#588F83"/>
+  <path d="M16 24.5s-7.2-4.2-7.2-9.4a4.1 4.1 0 0 1 7.2-2.7 4.1 4.1 0 0 1 7.2 2.7c0 5.2-7.2 9.4-7.2 9.4Z"
+        fill="none" stroke="#FAFAF7" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

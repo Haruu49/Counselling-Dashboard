@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#FAFAF7">
+<meta name="description" content="Counselling Dashboard — a university student counselling management prototype. Phase 1 frontend with fictional demonstration data.">
+<meta name="robots" content="noindex, nofollow">
+<title>Counselling Dashboard | Student Counselling Management</title>
+
+<link rel="icon" href="assets/images/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/images/favicon.svg">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+
+<link rel="stylesheet" href="css/dashboard.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/responsive.css">
+</head>
+
+<body class="is-booting">
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<div class="app-shell">
+  <!-- Collapsible on desktop, a drawer on small screens. Filled by app.js. -->
+  <aside id="sidebar" class="sidebar"></aside>
+  <div id="sidebar-overlay" class="sidebar-overlay" hidden></div>
+
+  <div class="app-main">
+    <header id="topbar" class="topbar"></header>
+    <main id="main-content" class="main" tabindex="-1"></main>
+
+    <footer class="app-footer">
+      <p>
+        <strong>Counselling Dashboard</strong> — Phase 1 frontend prototype.
+        All student records shown are fictional. Not approved for real counselling information.
+      </p>
+      <p>Phase 2 will add a Supabase backend with row level security, role-based access and audit logging.</p>
+    </footer>
+  </div>
+</div>
+
+<!-- Dialogs and toasts render outside the layout so they are never clipped. -->
+<div id="modal-root"></div>
+<div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="true"></div>
+
+<noscript>
+  <p class="noscript-note">
+    This dashboard needs JavaScript. Every chart, filter and table is rendered in the browser.
+  </p>
+</noscript>
+
+<!--
+  Both libraries are loaded from a CDN with an exact pinned version.
+  `defer` keeps them ahead of the application module in execution order,
+  and the app degrades to table views if either fails to load.
+-->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
