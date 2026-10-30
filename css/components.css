@@ -1063,3 +1063,96 @@ body.is-compact .card-head { padding: var(--space-4) var(--space-4) var(--space-
 
 .office-message { margin: 0; font-size: var(--text-sm); color: var(--ink-3); }
 .office-message.is-error { color: var(--status-critical); }
+
+/* --------------------------------------------------------------------------
+   20. Counsellor registration page — #/register
+
+   Built on the sign-in card above rather than beside it: same card, same
+   control, same focus ring, one field width wider and with room for a
+   message under each field.
+   -------------------------------------------------------------------------- */
+
+.auth-card-form { max-width: 29rem; }
+
+.field-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+.field-error {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--status-critical);
+}
+
+.auth-field.has-error .auth-input,
+.auth-input[aria-invalid='true'] {
+  border-color: var(--status-critical);
+}
+
+.auth-field.has-error .auth-input:focus,
+.auth-input[aria-invalid='true']:focus {
+  box-shadow: 0 0 0 3px var(--status-critical-tint);
+}
+
+/* Off screen rather than display:none, which some bots skip. */
+.honeypot {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auth-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1) var(--space-2);
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.auth-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-weight: 600;
+  color: var(--teal-deep);
+}
+
+.auth-links a:hover { text-decoration: underline; }
+.auth-links .icon { flex: none; }
+
+/* The confirmation card takes focus, so the move is announced, but a mouse
+   user should not be left looking at a stray outline. */
+.auth-card[tabindex]:focus { outline: none; }
+
+.auth-card[tabindex]:focus-visible {
+  box-shadow: 0 0 0 3px var(--teal-tint), var(--shadow-card);
+}
+
+.auth-card-form .auth-submit + .auth-submit { margin-top: calc(var(--space-2) * -1); }
+
+/* Six fields is a long column on a laptop, so the card widens into two, in
+   three tidy rows, while the summary and the button stay full width. */
+@media (min-width: 52rem) {
+  .auth-card-form { max-width: 44rem; }
+
+  .auth-card-form .auth-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+    gap: var(--space-3) var(--space-4);
+  }
+
+  .auth-card-form .auth-form > .auth-message,
+  .auth-card-form .auth-form > .auth-submit {
+    grid-column: 1 / -1;
+  }
+}

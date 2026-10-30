@@ -9,7 +9,10 @@
 import {
   h, icon, paintIcons, toast, confirmDialog, closeModal, clear, formatDate, debounce
 } from './ui.js';
-import { ROUTES, NAV_SECTIONS, initRouter, currentRoute, navigate, routeById, defineRoutes, handlerFor } from './router.js';
+import {
+  ROUTES, NAV_SECTIONS, initRouter, currentRoute, currentPublicRoute,
+  navigate, routeById, defineRoutes, handlerFor
+} from './router.js';
 import { getProfile, getPreferences, updatePreferences, refreshCounsellingRequests } from './data.js';
 import { isConfigured, currentSession, promptSignIn, renderConfigurationNeeded, signOut as endSupabaseSession, onSignedOut } from './auth.js';
 import { subscribeToRequests, unsubscribeFromRequests } from './realtime.js';
@@ -18,6 +21,7 @@ import { createNotificationMenu, closeNotificationMenu, refreshBadge } from './n
 import { destroyAll, setChartMotion } from './charts.js';
 import { mountOverview } from './dashboard.js';
 import { mountSubmissions } from './submissions.js';
+import { mountRegister } from './register.js';
 import { mountRegistration } from './registration.js';
 import { mountWellbeing } from './wellbeing.js';
 import { mountFeedback } from './feedback.js';
@@ -100,7 +104,7 @@ function renderSidebar(activeId) {
           h('small', {}, profile.role))),
       h('p', { class: 'sidebar-note' },
         icon('shield', 14),
-        h('span', {}, 'Invited counsellors only · live requests')))
+        h('span', {}, 'Counselling staff only · live requests')))
   );
 
   paintIcons(shell.sidebar);
@@ -322,6 +326,36 @@ async function signOut() {
 }
 
 /**
+ * The screens a visitor gets before any session exists: the sign-in card, and
+ * the public registration page when the hash asks for one. The links between
+ * them are ordinary hash links, so a hash change is what moves from one to the
+ * other — which is why this waits on either a sign-in or a hash change, and
+ * resolves only once there is a session.
+ *
+ * Neither screen reads a single record: the register page only posts to the
+ * register-counsellor function, and the sign-in card holds nothing at all.
+ */
+async function showPublicScreens() {
+  while (!(await currentSession())) {
+    const publicRoute = currentPublicRoute();
+    const moved = new AbortController();
+    const hashChanged = new Promise(resolve =>
+      window.addEventListener('hashchange', resolve, { once: true, signal: moved.signal }));
+
+    if (publicRoute) {
+      document.body.classList.add('is-signed-out');
+      mountRegister(clear(shell.main), { standalone: true });
+      // The only way off this page is one of its own links.
+      await hashChanged;
+    } else if (await Promise.race([promptSignIn(shell.main).then(() => true), hashChanged.then(() => false)])) {
+      moved.abort();
+      return;
+    }
+    moved.abort();
+  }
+}
+
+/**
  * Tears the dashboard down and shows the sign-in screen again. Used by the
  * logout button and by a session that ends elsewhere — in another tab, or
  * because a token could not be refreshed.
@@ -338,7 +372,7 @@ async function returnToSignIn(notice = null) {
   clear(shell.sidebar);
   clear(shell.topbar);
 
-  await promptSignIn(shell.main);
+  await showPublicScreens();
   if (notice) toast(notice, 'warning');
   await boot();
 }
@@ -350,6 +384,10 @@ async function returnToSignIn(notice = null) {
 defineRoutes({
   overview: container => mountOverview(container, { profile }),
   submissions: container => mountSubmissions(container),
+  // The registration page, hosted inside the shell for a counsellor who is
+  // already signed in and is setting up a colleague. Signed out, it is
+  // rendered by showPublicScreens() instead.
+  register: container => mountRegister(container),
   registration: container => mountRegistration(container),
   wellbeing: container => mountWellbeing(container),
   feedback: container => mountFeedback(container),
@@ -460,7 +498,8 @@ async function boot() {
 
   initRouter({
     landing: preferences.default_page,
-    onNavigate: route => mountRoute(route)
+    // A public route is not in ROUTES, so it arrives here as null.
+    onNavigate: route => mountRoute(route ?? currentPublicRoute())
   });
 
   await refreshBadge();
@@ -501,7 +540,9 @@ async function start() {
     return;
   }
 
-  if (!(await currentSession())) await promptSignIn(shell.main);
+  // #/register must open without a session, so the public screens come first
+  // and this returns only once a counsellor has signed in.
+  await showPublicScreens();
 
   onSignedOut(() => {
     if (signingOut) return;

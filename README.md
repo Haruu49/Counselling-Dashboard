@@ -5,13 +5,21 @@ counselling request form that feeds it.
 
 Students fill in **`student-form.html`**, a public page based on the printed
 counselling form (GMI-RO-P04-F02). Their request is validated on the server, stored
-in Supabase, and appears in the counsellor's queue without a refresh. Counsellors
-sign in to read it and manage the "For Office Use Only" half.
+in Supabase, and appears in the counsellor's queue without a refresh. There is no
+student login anywhere in this application: filling in the form is all a student
+ever does.
+
+Counsellors create their own login at **`#/register`** and sign in to read the
+queue and manage the "For Office Use Only" half. Registration is open to whoever
+has the link, by choice — so **the link is the only secret there is**, and an
+account made with it can read every student's request. Nobody without an account
+can read a single record.
 
 | Part | State |
 |---|---|
 | Counselling requests | **Live.** Real rows in Supabase, behind authentication and row level security. |
-| Registrations, wellbeing assessments, feedback, analytics | Fictional demonstration data, held in memory. |
+| Counsellor accounts | **Live.** Created at `#/register` by anyone with the link. |
+| Counselling registrations, wellbeing assessments, feedback, analytics | Fictional demonstration data, held in memory. |
 
 > **Still a prototype.** Counselling requests are stored for real, but the three
 > demonstration datasets are not, and there is no audit trail, retention policy or
@@ -100,6 +108,8 @@ Counselling-Dashboard/
 │   ├── realtime.js         The live subscription to the request queue
 │   ├── form-options.js     The printed form's lists, shared by both pages
 │   ├── student-form.js     The student form: build, validate, submit
+│   ├── register.js         Counsellor registration at #/register
+│   ├── registration-rules.js  Its rules, as a pure module the tests import
 │   ├── router.js           Hash routing and the route table
 │   ├── data.js             Demonstration dataset + data access layer
 │   ├── state.js            View state, display preferences, date ranges
@@ -109,7 +119,7 @@ Counselling-Dashboard/
 │   ├── notifications.js    Notification dropdown and badge
 │   ├── dashboard.js        Overview page
 │   ├── submissions.js      Student Submissions page + detail dialog
-│   ├── registration.js     Counselling Registration page
+│   ├── registration.js     Counselling Registration page (demonstration)
 │   ├── wellbeing.js        Wellbeing Assessment page
 │   ├── feedback.js         Feedback Management page
 │   ├── analytics.js        Analytics & Reports page
@@ -120,17 +130,22 @@ Counselling-Dashboard/
 │   └── icons/              Brand mark + a note on the icon set
 │
 ├── supabase/
-│   ├── config.toml                        CLI settings (verify_jwt off for the endpoint)
+│   ├── config.toml                        CLI settings (verify_jwt off for both endpoints)
 │   ├── migrations/                        Tables, RLS policies, triggers, realtime
 │   └── functions/
-│       └── submit-counselling-request/
-│           ├── index.ts                   The public endpoint
-│           └── validation.ts              The submission rules, as a pure module
+│       ├── submit-counselling-request/
+│       │   ├── index.ts                   The public submission endpoint
+│       │   └── validation.ts              The submission rules, as a pure module
+│       └── register-counsellor/
+│           ├── index.ts                   The only thing that creates an account
+│           └── validation.ts              The registration rules, as a pure module
 │
 ├── tests/
 │   ├── browser-checks.mjs            Dashboard behaviour (needs a session)
 │   ├── dashboard-request-checks.mjs  The counsellor side, against a mocked Supabase
 │   ├── student-form-checks.mjs       The student form, endpoint intercepted
+│   ├── register-page-checks.mjs      Counsellor registration, every call intercepted
+│   ├── registration-checks.mjs       The registration rules, directly
 │   ├── validation-checks.mjs         The edge function's rules, directly
 │   ├── sql-checks.sh                 The migration on a throwaway Postgres
 │   └── supabase-shim.sql             What that throwaway cluster needs first
@@ -181,6 +196,40 @@ summary at the top of the form that takes focus — a long form on a phone can p
 an inline message well off screen. Submitting shows a confirmation with a reference
 code the student can quote, what happens next, and where to go if they need help
 sooner than the queue allows.
+
+### Counsellor registration
+`#/register`, reachable without a session, because a counsellor who has no account
+yet cannot sign in to make one. Six fields: full name, staff ID, phone number,
+email address, and a password typed twice. There is nothing else to supply:
+registration is open, and the counselling office controls who gets the link.
+
+Values are normalised before they are stored, so the roster stays searchable: the
+staff ID is upper-cased, the email lower-cased, and `012-3456789`, `0123456789` and
+`+60 12 345 6789` all become `+60123456789`. A password is the one field never
+trimmed — a stripped space would mean the password stored is not the password
+typed. The second copy is compulsory and never leaves the browser: there is no SMTP
+on the project, so a password nobody can reproduce is an account nobody can
+recover.
+
+The page creates nothing itself. It posts to the `register-counsellor` edge
+function, which holds the service-role key on the server, validates everything
+again, counts attempts per connection, and creates the account already confirmed.
+The page then signs in with the password just chosen, so registering and arriving
+at the queue is one step. A counsellor who is already signed in and is setting up a
+colleague is not swapped into the new account.
+
+Each refusal lands beside the field it belongs to — a staff ID already taken, an
+email that already has an account — and neither says whose record was collided
+with.
+
+Because registration is open, removing access is the thing to know how to do:
+
+```sql
+update public.counsellor_profiles set active = false where email = 'them@example.edu';
+```
+
+That takes effect on their next request. The row stays, so their name still
+resolves on the requests they handled.
 
 ### Student Submissions
 Search by student ID or name; filter by form type, status and date range; sort any
@@ -280,40 +329,67 @@ supabase login
 supabase link --project-ref YOUR-PROJECT-REF
 ```
 
-**2. Apply the migration.** It creates `counselling_requests`,
+**2. Apply the migrations.** In order: the first creates `counselling_requests`,
 `counsellor_profiles` and `submission_throttle`, their RLS policies, the triggers,
-and adds the requests table to the realtime publication.
+and adds the requests table to the realtime publication. The second created a
+student `registrations` table. The third drops that table again — students only
+fill in the form — and adds counsellor registration: the `staff_id` and `phone`
+columns, and the trigger that decides who becomes a counsellor. The fourth takes
+that trigger function off the public API.
 
 ```sh
 supabase db push
 ```
 
-Without the CLI, paste `supabase/migrations/20261030120000_counselling_requests.sql`
-into the SQL editor in the Supabase dashboard and run it once.
+Without the CLI, paste each file in `supabase/migrations/` into the SQL editor in
+the Supabase dashboard, oldest first, and run it once. The order matters: each one
+builds on the last.
 
-**3. Deploy the submission endpoint.** JWT verification must be off: the caller is
-a student with no session. `supabase/config.toml` already sets this, and the flag
-is repeated here for anyone deploying without it.
+**3. Deploy both endpoints.** JWT verification must be off for both: one caller is
+a student with no session, the other a counsellor who has no account yet.
+`supabase/config.toml` already sets this, and the flags are repeated here for
+anyone deploying without it.
 
 ```sh
 supabase functions deploy submit-counselling-request --no-verify-jwt
+supabase functions deploy register-counsellor --no-verify-jwt
+
 supabase secrets set SUBMISSION_THROTTLE_SALT="$(openssl rand -hex 16)"
 ```
 
-`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected by the platform. Two
-optional secrets: `SUBMISSION_HOURLY_LIMIT` (default 5) and `ALLOWED_ORIGINS`
-(default `*` — set it to the site's origin once that is known).
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected by the platform.
+Optional: `SUBMISSION_HOURLY_LIMIT` (default 5), `COUNSELLOR_REGISTRATION_LIMIT`
+(default 10) and `ALLOWED_ORIGINS` (default `*` — set it to the site's origin once
+that is known).
 
-**4. Close public sign-up.** Authentication → Providers → Email: turn
-**Allow new users to sign up** off. Counsellor accounts are invite-only, and the
-trigger in the migration admits any new auth user to the queue, so this is what
-keeps the queue closed.
+**There is no gate on `register-counsellor`.** Whoever can reach the page can
+create an account that reads every student's counselling request, and the only
+abuse control is the per-connection throttle. That is a deliberate choice for this
+prototype — the counselling office hands the link out itself — and it is the first
+thing to revisit before any real student data goes near this. See *Known
+limitations*.
 
-**5. Create a counsellor.** Authentication → Users → **Add user**, with
-*Auto Confirm User* ticked. The trigger creates their `counsellor_profiles` row,
-which is what grants access; they can change their display name under Settings.
-To remove someone's access later, set `active = false` on that row rather than
-deleting it, so their name still resolves on the requests they handled.
+**4. Optionally close public sign-up.** Authentication → Providers → Email:
+**Allow new users to sign up**. Leaving it on is safe — `handle_new_counsellor()`
+gives an account the dashboard only when the sign-up carried
+`app_metadata.counsellor_approved`, which a browser cannot set, so anyone signing
+up directly lands inactive and reads nothing. Turning it off removes the pointless
+endpoint anyway; `register-counsellor` keeps working either way, because the admin
+API it uses is not governed by that setting.
+
+**5. The first counsellor.** Send them `#/register`. That is the whole process, and
+it is the same for everyone after them.
+
+Creating one by hand in Authentication → Users → **Add user** also works, but the
+dashboard cannot set `app_metadata`, so that account arrives **inactive** and sees
+nothing until you run:
+
+```sql
+update public.counsellor_profiles set active = true where email = 'them@example.edu';
+```
+
+That is also how you remove access later — set `active = false` rather than
+deleting the row, so their name still resolves on the requests they handled.
 
 **6. Point the pages at the project.**
 
@@ -377,8 +453,28 @@ columns are frozen at insert by `counselling_requests_freeze_submission()`. A
 counsellor updating `description` or `student_name` gets an exception, not a
 silent write — enforced in the database, not only in the interface.
 
-`tests/sql-checks.sh` asserts every row of that table by attempting it as the role
-in question.
+| Who | `counsellor_profiles` |
+|---|---|
+| A student (`anon`) | Nothing. Every grant is revoked explicitly. |
+| An inactive account | Nothing, including its own row. `is_counsellor()` is false. |
+| An active counsellor | Read the roster; update only their own row. |
+| Anyone | No insert and no delete. Only the trigger creates a row. |
+
+Becoming a counsellor is the one thing no policy can grant, because the row that
+makes someone a counsellor is written by `handle_new_counsellor()` as the trigger
+on `auth.users`. It sets `active` from `app_metadata.counsellor_approved`, which
+only a service-role caller can write — so the `register-counsellor` function,
+is the only thing in the system that can admit anybody. A sign-up straight against the public endpoint gets a row with
+`active = false`, no staff ID and no phone number, and reads nothing.
+
+The trigger is also careful never to raise. `user_metadata` is whatever the caller
+sent, and an exception there would abort the `auth.users` insert and reach the
+browser as an opaque 500 from GoTrue, so a malformed staff ID or phone number is
+dropped rather than refused.
+
+`tests/sql-checks.sh` asserts every row of both tables by attempting it as the role
+in question, and asserts the gate by inserting into `auth.users` the way each
+caller would — with the approval flag and without it.
 
 ---
 
@@ -411,18 +507,27 @@ lives. What changed is that some records now come from Postgres:
 
 **Access**
 
-- Counsellor accounts are invite-only. There is no sign-up form, and public sign-up
-  must be turned off in the project (step 4 of **Supabase setup**).
+- A counsellor account can only be *activated* by the `register-counsellor` edge
+  function, with the service-role key. The trigger gives every new auth user an
+  inactive profile, and only that server-side write switches one on, so a sign-up
+  that skips the function reads nothing. **The function itself admits anyone who
+  asks**; see *Known limitations*.
 - The sign-in form gives the same message for an unknown address and a wrong
   password, so it cannot be used to find out who has an account.
 - RLS is enabled *and forced* on every exposed table. See **Access rules**.
 - The dashboard renders nothing before a session exists, so there is no
-  unauthenticated path to a page that would try to read student records.
+  unauthenticated path to a page that would try to read student records. The one
+  page that does render signed out, `#/register`, reads nothing: its only call is a
+  POST to the registration function. `tests/register-page-checks.mjs` asserts that
+  no PostgREST read is attempted while signed out, rather than that none rendered.
 
 **Student data**
 
 - A student cannot read any submission, including their own: there is no read path
-  for `anon` at all.
+  for `anon` at all. No table in the schema grants `anon` anything.
+- A counsellor's own password never reaches the database as typed, and never
+  reaches the console at all. The registration page logs an error's name, not its
+  message, and the function logs status codes rather than bodies.
 - The counsellor session is kept in `localStorage` under `counselling-dashboard-auth`.
   No student record, name, identifier or comment is ever written to browser storage,
   and both test suites assert it.
@@ -455,28 +560,36 @@ before real counselling information.
 
 ## Verification
 
-Four suites, run independently. None of them touches a live Supabase project.
+Six suites, run independently. None of them touches a live Supabase project.
 
 | Suite | What it covers | Needs |
 |---|---|---|
-| `tests/sql-checks.sh` | The migration and every access rule, applied to a throwaway local Postgres and attempted as each role | Postgres 16 server binaries |
+| `tests/sql-checks.sh` | Every migration and every access rule, applied to a throwaway local Postgres and attempted as each role | Postgres 16 server binaries |
 | `tests/validation-checks.mjs` | The edge function's rules, imported directly | Node 22.6+ |
+| `tests/registration-checks.mjs` | The registration rules, imported directly, and that the page, the function and the migration agree | Node 22.6+ |
 | `tests/student-form-checks.mjs` | The student form end to end, endpoint intercepted | Playwright, a static server |
+| `tests/register-page-checks.mjs` | Counsellor registration end to end, every call intercepted | Playwright, a static server |
 | `tests/dashboard-request-checks.mjs` | The counsellor side against a mocked Supabase | Playwright, a static server |
 | `tests/browser-checks.mjs` | The existing dashboard behaviour | Playwright, a static server, **and a counsellor account** |
 
 ```sh
 ./tests/sql-checks.sh
 node tests/validation-checks.mjs
+node tests/registration-checks.mjs
 
 npm install --no-save playwright && npx playwright install chromium
 python3 -m http.server 8000 &
 BASE_URL=http://localhost:8000/ node tests/student-form-checks.mjs
+BASE_URL=http://localhost:8000/ node tests/register-page-checks.mjs
 BASE_URL=http://localhost:8000/ node tests/dashboard-request-checks.mjs
 BASE_URL=http://localhost:8000/ \
   TEST_COUNSELLOR_EMAIL=... TEST_COUNSELLOR_PASSWORD=... \
   node tests/browser-checks.mjs
 ```
+
+`browser-checks.mjs` writes when it is given an account: it saves a profile and
+changes a submission's status. Point it at a project you are happy to have
+written to, never one holding records anyone depends on.
 
 `browser-checks.mjs` now needs a real session for everything past the sign-in
 screen. Without those two variables it checks the gate — that an unauthenticated
@@ -508,6 +621,14 @@ See `TESTING.md` for the full list and what is not covered.
   real Postgres event end to end.
 - **Lucide ships as one 356 KB bundle.** Fine locally; a production build should
   subset to the roughly 40 icons actually used.
+- **Registration is open, and this is the biggest thing wrong with the
+  prototype.** Anyone who reaches `#/register` — because the link was forwarded,
+  guessed, or found in a browser history — can create an account and read every
+  student's counselling request. Nothing checks that they work for the
+  university. The per-connection throttle slows a script down; it stops nobody
+  who is willing to fill the form in once. Before real student data goes
+  anywhere near this, registration needs either per-person invitations with an
+  expiry, an approval step, or at minimum a shared code.
 - **Search covers student ID, name and feedback comments only** — not reasons given
   on a registration form.
 - **The assessment band is arithmetic, not clinical.** It averages four self-reported
@@ -518,7 +639,10 @@ See `TESTING.md` for the full list and what is not covered.
 ## Still to improve
 
 - An audit log of who read or changed which request, and a retention policy.
-- Rate limiting and lockout on sign-in attempts.
+- A gate on registration: per-person invitations with an expiry, or an approval
+  step, and a list of who registered when.
+- Rate limiting and lockout on sign-in attempts. Registration is already throttled
+  per connection per hour; signing in is not.
 - Letting a student check the status of their own request from the reference code,
   which needs a second endpoint rather than any read access to the table.
 - Vendor the CDN libraries locally and subset the icon set.

@@ -82,8 +82,16 @@ ok('An unauthenticated visitor gets a sign-in screen, not the dashboard',
    configured ? '' : 'js/config.js is missing, so the configuration screen is shown instead');
 ok('No student record is rendered before sign-in',
    (await page.locator('.data-table, .stat-card').count()) === 0);
-ok('There is no public sign-up link',
-   !(await page.locator('.auth-card').innerText()).toLowerCase().includes('create an account'));
+// The card carries one link, to counsellor registration. That page does
+// create a login — registration is open by the counselling office's choice —
+// so what this suite still holds it to is the rule below: signed out, the
+// dashboard itself renders nothing.
+ok('The only link out is counsellor registration',
+   (await page.locator('.auth-card a').count()) === 1
+   && (await page.getAttribute('.auth-card a', 'href')) === '#/register',
+   await page.locator('.auth-card a').evaluateAll(links => links.map(a => a.getAttribute('href')).join(', ')));
+ok('The sign-in screen says students do not sign in here',
+   (await page.locator('.auth-foot').innerText()).toLowerCase().includes('students send a request'));
 
 if (!configured) {
   console.log('\nSKIP  js/config.js is missing. Copy js/config.example.js and fill it in.');

@@ -27,6 +27,7 @@ const DEFAULT_QUERY = {
 const queries = {
   submissions: { ...DEFAULT_QUERY },
   registrations: { ...DEFAULT_QUERY, sort_by: 'submitted_at' },
+  // Live rows from public.registrations, which timestamps with created_at.
   wellbeing: { ...DEFAULT_QUERY, sort_by: 'submitted_at' },
   feedback: { ...DEFAULT_QUERY, sort_by: 'submitted_at' },
   // Seeded below, once RANGE_PRESETS exists.

@@ -32,7 +32,11 @@ create schema auth;
 create table auth.users (
   id                 uuid primary key default gen_random_uuid(),
   email              text unique,
+  -- What the caller sent. A browser can set this, so nothing trusts it.
   raw_user_meta_data jsonb not null default '{}'::jsonb,
+  -- What the server set. Only a service-role caller can write this, which is
+  -- what handle_new_counsellor() relies on to decide who becomes a counsellor.
+  raw_app_meta_data  jsonb not null default '{}'::jsonb,
   created_at         timestamptz not null default now()
 );
 

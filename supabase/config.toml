@@ -8,3 +8,9 @@ project_id = "counselling-dashboard"
 
 [functions.submit-counselling-request]
 verify_jwt = false
+
+# The registration endpoint is called by a counsellor who has no account yet,
+# so JWT verification must stay off for it too. Nothing guards it but the
+# per-connection throttle: registration is open to whoever holds the link.
+[functions.register-counsellor]
+verify_jwt = false

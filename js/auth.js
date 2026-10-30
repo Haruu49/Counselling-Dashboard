@@ -1,10 +1,12 @@
 /**
  * auth.js — counsellor sign-in.
  *
- * Accounts are invite-only. There is no sign-up form here and there must not
- * be one: a counsellor account is created in the Supabase dashboard, and the
- * trigger in supabase/migrations adds the matching counsellor_profiles row
- * that actually grants access to the queue.
+ * This file only signs an existing counsellor in. Creating an account is a
+ * different thing in a different place: #/register posts to the
+ * register-counsellor edge function, which holds the service-role key and is
+ * the only thing that can admit anybody.
+ * handle_new_counsellor() in supabase/migrations adds the counsellor_profiles
+ * row that actually grants access to the queue.
  *
  * The dashboard is not rendered at all until a session exists, so an
  * unauthenticated visitor never reaches a page that would try to read student
@@ -128,7 +130,14 @@ export function promptSignIn(main) {
           form,
           h('p', { class: 'auth-foot' },
             icon('shield', 14),
-            h('span', {}, 'Accounts are created by the counselling office. There is no public sign-up.'))))
+            h('span', {}, 'For counselling staff. Students send a request from the student form instead.')),
+          // Registration is open to whoever reaches the page, by the
+          // counselling office's own choice. See js/register.js.
+          h('p', { class: 'auth-links' },
+            h('span', {}, 'New counsellor?'),
+            h('a', { href: '#/register' },
+              icon('user-plus', 14),
+              h('span', {}, 'Create an account')))))
     );
     paintIcons(main);
     email.focus();
@@ -152,8 +161,8 @@ export function renderConfigurationNeeded(main) {
         h('ol', { class: 'auth-steps' },
           h('li', {}, 'Copy ', h('code', {}, 'js/config.example.js'), ' to ', h('code', {}, 'js/config.js'), '.'),
           h('li', {}, 'Paste in the project URL and publishable key from Project Settings → API.'),
-          h('li', {}, 'Apply ', h('code', {}, 'supabase/migrations/'), ' and deploy the ',
-            h('code', {}, 'submit-counselling-request'), ' function.'),
+          h('li', {}, 'Apply ', h('code', {}, 'supabase/migrations/'), ' and deploy both functions in ',
+            h('code', {}, 'supabase/functions/'), '.'),
           h('li', {}, 'Reload this page.')),
         h('p', { class: 'auth-foot' },
           icon('shield', 14),

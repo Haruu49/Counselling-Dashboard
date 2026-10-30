@@ -89,6 +89,16 @@ else
   echo; echo "$pass passed, $fail failed"; exit 1
 fi
 
+for later in $(ls "$ROOT"/supabase/migrations/*.sql | tail -n +2); do
+  name="$(basename "$later" .sql | cut -c16-)"
+  if $PSQL -v ON_ERROR_STOP=1 -f "$later" >/dev/null 2>&1; then
+    ok "Migration $name applies cleanly" pass
+  else
+    ok "Migration $name applies cleanly" fail "$($PSQL -f "$later" 2>&1 | grep -m1 ERROR)"
+    echo; echo "$pass passed, $fail failed"; exit 1
+  fi
+done
+
 assert_true 'RLS is enabled on counselling_requests' \
   "select relrowsecurity and relforcerowsecurity from pg_class where oid='public.counselling_requests'::regclass"
 assert_true 'RLS is enabled on counsellor_profiles' \
@@ -110,8 +120,12 @@ assert_eq  'anon holds no privilege on the throttle table' '0' \
 COUNSELLOR='11111111-1111-4111-8111-111111111111'
 OUTSIDER='22222222-2222-4222-8222-222222222222'
 
-sql "insert into auth.users (id, email, raw_user_meta_data)
-     values ('$COUNSELLOR', 'lina.haron@counselling.demo', '{\"full_name\":\"Dr. Lina Haron\"}'::jsonb);"
+# Created the way register-counsellor creates one: the details in
+# user_metadata, the approval in app_metadata.
+sql "insert into auth.users (id, email, raw_user_meta_data, raw_app_meta_data)
+     values ('$COUNSELLOR', 'lina.haron@counselling.demo',
+             '{\"full_name\":\"Dr. Lina Haron\",\"staff_id\":\"STAFF2041\",\"phone\":\"+60123456789\"}'::jsonb,
+             '{\"counsellor_approved\":true}'::jsonb);"
 assert_eq 'New auth user gets a counsellor profile' 'Dr. Lina Haron' \
   "select full_name from public.counsellor_profiles where user_id='$COUNSELLOR'"
 assert_eq 'Initials are derived for the sidebar' 'DL' \
@@ -296,6 +310,139 @@ got="$(val "select public.register_submission_attempt('hash-b', 3)")"
                || ok 'The throttle is per address, not global' fail "got '$got'"
 assert_eq 'No raw address is stored by the throttle' '0' \
   "select count(*) from public.submission_throttle where ip_hash like '%.%.%.%'"
+
+# --------------------------------------------------------------------------
+# Counsellor registration
+#
+# The gate is handle_new_counsellor(): a new auth user becomes an active
+# counsellor only when its insert carried app_metadata.counsellor_approved,
+# which only a service-role caller — the register-counsellor function — can
+# set. Everything below is asserted by inserting into auth.users the way each
+# caller would, rather than by reading the function's source.
+# --------------------------------------------------------------------------
+assert_eq 'The student registration table is gone' 'f' \
+  "select exists(select 1 from pg_tables where schemaname='public' and tablename='registrations')"
+
+# The gate function is not a PostgREST endpoint. is_counsellor() has to stay
+# executable: the policies call it as the querying role, and revoking it stops
+# every policy matching.
+assert_eq 'Nobody can call the gate function over RPC' 'f' \
+  "select bool_or(has_function_privilege(r, 'public.handle_new_counsellor()', 'execute'))
+     from unnest(array['anon','authenticated','public']) as r"
+assert_eq 'A counsellor can still call is_counsellor()' 't' \
+  "select has_function_privilege('authenticated', 'public.is_counsellor()', 'execute')"
+assert_eq 'anon holds no privilege on counsellor profiles' '0' \
+  "select count(*) from information_schema.role_table_grants
+    where grantee='anon' and table_name='counsellor_profiles'"
+
+assert_eq 'An approved sign-up is an active counsellor' 't' \
+  "select active from public.counsellor_profiles where user_id='$COUNSELLOR'"
+assert_eq 'The staff ID the function sent is stored' 'STAFF2041' \
+  "select staff_id from public.counsellor_profiles where user_id='$COUNSELLOR'"
+assert_eq 'The phone number the function sent is stored' '+60123456789' \
+  "select phone from public.counsellor_profiles where user_id='$COUNSELLOR'"
+
+# A stranger posting straight to /auth/v1/signup: no app_metadata, so no
+# approval. Public sign-up is enabled on the project, so this is the case that
+# matters most.
+STRANGER='33333333-3333-4333-8333-333333333333'
+sql "insert into auth.users (id, email, raw_user_meta_data)
+     values ('$STRANGER', 'stranger@example.com',
+             '{\"full_name\":\"Opportunist Smith\",\"staff_id\":\"STAFF2041\",\"phone\":\"+60100000000\"}'::jsonb);"
+
+assert_eq 'An unapproved sign-up still gets a profile row' '1' \
+  "select count(*) from public.counsellor_profiles where user_id='$STRANGER'"
+assert_eq 'An unapproved sign-up is not active' 'f' \
+  "select active from public.counsellor_profiles where user_id='$STRANGER'"
+assert_eq 'An unapproved sign-up cannot claim a staff ID' '' \
+  "select coalesce(staff_id, '') from public.counsellor_profiles where user_id='$STRANGER'"
+assert_eq 'An unapproved sign-up cannot claim a phone number' '' \
+  "select coalesce(phone, '') from public.counsellor_profiles where user_id='$STRANGER'"
+
+got="$(as_val authenticated "$STRANGER" 'select count(*) from public.counselling_requests')"
+[ "$got" = 0 ] && ok 'An unapproved sign-up reads no student requests' pass \
+               || ok 'An unapproved sign-up reads no student requests' fail "saw $got rows"
+
+got="$(as_val authenticated "$STRANGER" 'select public.is_counsellor()')"
+[ "$got" = f ] && ok 'is_counsellor() rejects an inactive profile' pass \
+               || ok 'is_counsellor() rejects an inactive profile' fail "got '$got'"
+
+as authenticated "$STRANGER" "update public.counsellor_profiles set active = true where user_id='$STRANGER'"
+assert_eq 'An inactive account cannot approve itself' 'f' \
+  "select active from public.counsellor_profiles where user_id='$STRANGER'"
+
+# The path registration actually takes. GoTrue's admin API inserts the user
+# first and applies app_metadata in a second write, so the trigger never sees
+# counsellor_approved and leaves the row inactive; the edge function then
+# PATCHes it as service_role. That is reproduced here in two steps, because a
+# single insert with the flag already set is the one case production never hits.
+FUNCPATH='66666666-6666-4666-8666-666666666666'
+sql "insert into auth.users (id, email, raw_user_meta_data)
+     values ('$FUNCPATH', 'via.function@counselling.demo',
+             '{\"full_name\":\"Via Function\",\"staff_id\":\"STAFF3030\",\"phone\":\"+60123456711\"}'::jsonb);"
+assert_eq 'A sign-up the trigger cannot vouch for starts inactive' 'f' \
+  "select active from public.counsellor_profiles where user_id='$FUNCPATH'"
+got="$(as_val authenticated "$FUNCPATH" 'select count(*) from public.counselling_requests')"
+[ "$got" = 0 ] && ok 'And reads nothing in that state' pass \
+               || ok 'And reads nothing in that state' fail "saw $got rows"
+
+# What the function does next, with the service-role key.
+as service_role '' "update public.counsellor_profiles
+   set active = true, staff_id = 'STAFF3030', phone = '+60123456711'
+   where user_id='$FUNCPATH'" \
+  && ok 'The function can admit them' pass || ok 'The function can admit them' fail 'update refused'
+
+assert_eq 'The staff ID is stored by that write' 'STAFF3030' \
+  "select staff_id from public.counsellor_profiles where user_id='$FUNCPATH'"
+got="$(as_val authenticated "$FUNCPATH" 'select count(*) from public.counselling_requests')"
+[ -n "$got" ] && [ "$got" != 0 ] && ok 'And then they read the queue' pass \
+                                 || ok 'And then they read the queue' fail "saw '$got' rows"
+
+# Junk in user_metadata must not abort the sign-up: GoTrue can only report a
+# trigger exception as an opaque 500, so bad values are dropped instead.
+JUNK='44444444-4444-4444-8444-444444444444'
+sql "insert into auth.users (id, email, raw_user_meta_data, raw_app_meta_data)
+     values ('$JUNK', 'j@counselling.demo',
+             '{\"full_name\":\"\",\"staff_id\":\"no\",\"phone\":\"012-3456789\"}'::jsonb,
+             '{\"counsellor_approved\":true}'::jsonb);"
+assert_eq 'A sign-up with junk metadata still creates the account' '1' \
+  "select count(*) from public.counsellor_profiles where user_id='$JUNK'"
+assert_eq 'A name too short to store falls back rather than failing' 'New counsellor' \
+  "select full_name from public.counsellor_profiles where user_id='$JUNK'"
+assert_eq 'A malformed staff ID is dropped, not stored' '' \
+  "select coalesce(staff_id, '') from public.counsellor_profiles where user_id='$JUNK'"
+assert_eq 'An unnormalised phone number is dropped, not stored' '' \
+  "select coalesce(phone, '') from public.counsellor_profiles where user_id='$JUNK'"
+
+# Two counsellors cannot hold one staff ID.
+sql "update public.counsellor_profiles set staff_id='STAFF9999' where user_id='$JUNK';"
+got="$($PSQL -c "update public.counsellor_profiles set staff_id='STAFF2041' where user_id='$JUNK';" 2>&1)"
+case "$got" in
+  *duplicate*|*unique*) ok 'A staff ID cannot be taken twice' pass ;;
+  *)                    ok 'A staff ID cannot be taken twice' fail "$got" ;;
+esac
+
+# The CHECK constraints, which are the server-side half of the form's rules.
+bad_profile() { # name, column, value
+  got="$($PSQL -c "update public.counsellor_profiles set $2='$3' where user_id='$JUNK';" 2>&1)"
+  case "$got" in
+    *violates\ check\ constraint*) ok "$1" pass ;;
+    *)                              ok "$1" fail "accepted '$3'" ;;
+  esac
+}
+bad_profile 'A lower-case staff ID is rejected'          staff_id 'staff2041'
+bad_profile 'A three-character staff ID is rejected'     staff_id 'ST5'
+bad_profile 'A staff ID with a hyphen is rejected'       staff_id 'STAFF-2041'
+bad_profile 'A staff ID with a space is rejected'        staff_id 'STAFF 204'
+bad_profile 'An unnormalised phone number is rejected'   phone    '012-3456789'
+bad_profile 'A non-Malaysian phone number is rejected'   phone    '+442071234567'
+bad_profile 'A phone number that is too short is rejected' phone  '+6012345'
+
+assert_eq 'A counsellor sees a colleague in the roster' '4' \
+  "select count(*) from public.counsellor_profiles"
+got="$(as_val authenticated "$COUNSELLOR" 'select count(*) from public.counsellor_profiles')"
+[ "$got" = 4 ] && ok 'An active counsellor reads the whole roster' pass \
+               || ok 'An active counsellor reads the whole roster' fail "saw $got rows"
 
 echo
 echo "$pass passed, $fail failed"
